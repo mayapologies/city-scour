@@ -1,0 +1,13 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+osmnx==1.9.4
+networkx==3.3
+geopandas==0.14.4
+shapely==2.0.6
+fiona==1.9.6
+lxml==5.3.0
+scipy==1.13.1
+numpy==1.26.4
+scikit-learn==1.8.0
+pytest==9.0.3
