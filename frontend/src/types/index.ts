@@ -22,6 +22,8 @@ export interface EdgeProperties {
   length: number;
   is_duplicate?: boolean;
   order?: number | null;
+  access?: string;
+  is_private?: boolean;
 }
 
 export interface GeoFeature {
@@ -60,6 +62,7 @@ export interface Section {
   edge_ids: string[];
   edges: GeoFeature[];
   color?: string;
+  is_private: boolean;
 }
 
 export interface Walk {
@@ -71,6 +74,7 @@ export interface Walk {
   start: LatLng;
   route: [number, number][];
   backtrack_edge_ids: string[];
+  is_private: boolean;
 }
 
 export interface WalkDetail extends Walk {
@@ -83,7 +87,9 @@ export interface WalksResponse {
   walks: Walk[];
 }
 
-export type EdgeStatus = "unvisited" | "walked" | "driven";
+export type EdgeStatus = "unvisited" | "complete";
+
+export type WalkState = "unvisited" | "complete";
 
 export interface Progress {
   // edge_id -> status

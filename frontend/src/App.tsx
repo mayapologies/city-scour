@@ -26,7 +26,7 @@ export default function App() {
   const [hoursPerWalk, setHoursPerWalk] = useState(1.0);
   const [error, setError] = useState<string | null>(null);
 
-  const { progress, markEdge, markSection, resetProgress } = useProgress(sections);
+  const { progress, markEdge, markEdges, markSection, resetProgress } = useProgress(sections);
 
   // Boot: load default boundary → roads → sections
   useEffect(() => {
@@ -52,9 +52,10 @@ export default function App() {
     })();
   }, []);
 
-  // When a section is selected, load its walks for the current hours-per-walk
+  // When a section is selected, ensure its walks are loaded for the current hours-per-walk.
   useEffect(() => {
     if (selectedSectionId === null) return;
+    if (walksBySection[selectedSectionId]) return;
     setLoadingWalks(true);
     api
       .getSectionWalks(selectedSectionId, hoursPerWalk)
@@ -63,7 +64,36 @@ export default function App() {
       )
       .catch((e) => setError(String(e)))
       .finally(() => setLoadingWalks(false));
-  }, [selectedSectionId, hoursPerWalk]);
+  }, [selectedSectionId, hoursPerWalk, walksBySection]);
+
+  // Prefetch walks for every section so header km/hours stats include the full network.
+  // Runs after sections load and whenever hours-per-walk changes.
+  useEffect(() => {
+    if (sections.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const sectionIds = sections.map((s) => s.section_id);
+      const results = await Promise.all(
+        sectionIds.map((sid) =>
+          api
+            .getSectionWalks(sid, hoursPerWalk)
+            .then((res) => [sid, res.walks] as const)
+            .catch(() => [sid, [] as Walk[]] as const)
+        )
+      );
+      if (cancelled) return;
+      setWalksBySection((prev) => {
+        const next = { ...prev };
+        for (const [sid, ws] of results) {
+          if (!next[sid]) next[sid] = ws;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sections, hoursPerWalk]);
 
   // Fetch a walk's detailed route when one is selected
   useEffect(() => {
@@ -118,17 +148,8 @@ export default function App() {
   }, []);
 
   const handleEdgeClick = useCallback(
-    (edgeId: string, isHighway: boolean, currentStatus: EdgeStatus) => {
-      // Cycle: unvisited → walked → driven → unvisited
-      // Highways can only be unvisited or driven
-      let next: EdgeStatus;
-      if (isHighway) {
-        next = currentStatus === "driven" ? "unvisited" : "driven";
-      } else {
-        if (currentStatus === "unvisited") next = "walked";
-        else if (currentStatus === "walked") next = "driven";
-        else next = "unvisited";
-      }
+    (edgeId: string, _isHighway: boolean, currentStatus: EdgeStatus) => {
+      const next: EdgeStatus = currentStatus === "complete" ? "unvisited" : "complete";
       markEdge(edgeId, next);
     },
     [markEdge]
@@ -149,12 +170,14 @@ export default function App() {
         selectedSectionId={selectedSectionId}
         selectedWalkId={selectedWalkId}
         walks={selectedSectionId !== null ? walksBySection[selectedSectionId] ?? [] : []}
+        walksBySection={walksBySection}
         progress={progress}
         loadingWalks={loadingWalks}
         loadingWalkDetail={loadingWalkDetail}
         onSelectSection={handleSelectSection}
         onSelectWalk={setSelectedWalkId}
         onMarkSection={markSection}
+        onMarkEdges={markEdges}
         onResetProgress={resetProgress}
         onUploadBoundary={handleUploadBoundary}
         onSetHoursPerWalk={handleSetHoursPerWalk}
@@ -225,9 +248,8 @@ export default function App() {
           >
             <div style={{ fontWeight: 600, color: "#e2e8f0", marginBottom: 6 }}>Legend</div>
             {[
-              { color: "#22c55e", label: "Walked" },
-              { color: "#60a5fa", label: "Driven" },
-              { color: "#94a3b8", label: "Highway (drive only)" },
+              { color: "#22c55e", label: "Covered" },
+              { color: "#94a3b8", label: "Highway" },
               { color: "#facc15", label: "Planned route" },
               { color: "#f97316", label: "Route backtrack" },
             ].map(({ color, label }) => (

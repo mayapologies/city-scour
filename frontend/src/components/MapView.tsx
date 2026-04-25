@@ -2,12 +2,21 @@ import { useEffect, useRef } from "react";
 import L from "leaflet";
 import type { GeoFeature, Section, EdgeStatus, Progress } from "../types";
 
-// Distinct colors for sections (cycles for > 20 sections)
+// Vibrant, high-saturation palette — readable on dark map background (#1e1e2e).
+// Cycles for > 12 sections.
 const SECTION_COLORS = [
-  "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-  "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
-  "#469990", "#dcbeff", "#9a6324", "#fffac8", "#800000",
-  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9",
+  "#ef4444", // red
+  "#f97316", // orange
+  "#eab308", // amber
+  "#84cc16", // lime
+  "#22c55e", // green
+  "#14b8a6", // teal
+  "#06b6d4", // cyan
+  "#3b82f6", // blue
+  "#8b5cf6", // violet
+  "#d946ef", // fuchsia
+  "#ec4899", // pink
+  "#f43f5e", // rose
 ];
 
 function sectionColor(id: number): string {
@@ -19,11 +28,12 @@ function edgeColor(
   isHighway: boolean,
   sectionId: number | undefined,
   selectedSectionId: number | null,
-  progress: Progress
+  progress: Progress,
+  isPrivate: boolean
 ): string {
   const status = progress.edges[edgeId];
-  if (status === "walked") return "#22c55e";
-  if (status === "driven") return "#60a5fa";
+  if (status === "complete") return "#22c55e";
+  if (isPrivate) return "#a78bfa";
   if (isHighway) return "#94a3b8";
   if (selectedSectionId !== null && sectionId === selectedSectionId) {
     return "#fff";
@@ -125,20 +135,34 @@ export function MapView({
           name: string;
           length: number;
           section_id?: number;
+          is_private?: boolean;
+          access?: string;
         };
 
+        const isPrivate =
+          props.is_private === true || props.access === "private";
         const color = edgeColor(
           props.edge_id,
           props.is_highway,
           sid,
           selectedSectionId,
-          progress
+          progress,
+          isPrivate
         );
-        const weight = edgeWeight(props.is_highway, isSelected);
-        const opacity = selectedSectionId === null || isSelected ? 1 : 0.3;
+        const weight = isPrivate
+          ? 2
+          : edgeWeight(props.is_highway, isSelected);
+        const baseOpacity =
+          selectedSectionId === null || isSelected ? 1 : 0.3;
+        const opacity = isPrivate ? Math.min(0.65, baseOpacity) : baseOpacity;
 
         const polyline = L.geoJSON(feat as GeoJSON.Feature, {
-          style: { color, weight, opacity },
+          style: {
+            color,
+            weight,
+            opacity,
+            dashArray: isPrivate ? "4 4" : undefined,
+          },
         });
 
         polyline.on("click", () => {
@@ -148,7 +172,8 @@ export function MapView({
 
         polyline.bindTooltip(
           `<strong>${props.name || props.highway || "road"}</strong><br>` +
-            `Section ${sid} · ${Math.round(props.length)}m`,
+            `Section ${sid} · ${Math.round(props.length)}m` +
+            (isPrivate ? "<br>🔒 private (may be gated)" : ""),
           { sticky: true }
         );
 
@@ -195,34 +220,32 @@ export function MapView({
     });
   }, [walkRouteFeatures]);
 
-  // Parking markers — one per section, anchored at parking_lat/lng
+  // Parking marker — only for the selected section
   useEffect(() => {
     const group = parkingLayersRef.current;
     if (!group) return;
     group.clearLayers();
 
-    for (const section of sections) {
-      const isSelected = section.section_id === selectedSectionId;
-      const isLot = section.parking_type === "lot";
-      const bg = isLot ? "#6366f1" : "#475569";
-      const symbol = isLot ? "P" : "S";
-      const dim = isSelected || selectedSectionId === null ? 1 : 0.35;
+    if (selectedSectionId === null) return;
+    const section = sections.find((s) => s.section_id === selectedSectionId);
+    if (!section) return;
 
-      const icon = L.divIcon({
-        html: `<div style="opacity:${dim};background:${bg};color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,.4)">${symbol}</div>`,
-        className: "",
-        iconAnchor: [11, 11],
-      });
+    const isLot = section.parking_type === "lot";
+    const bg = isLot ? "#6366f1" : "#475569";
+    const symbol = isLot ? "P" : "S";
 
-      L.marker([section.parking_lat, section.parking_lng], { icon })
-        .bindTooltip(
-          `<strong>${isLot ? "Parking lot" : "Street parking"}</strong><br>${section.parking_name}<br>Section ${section.section_id} · ${section.total_km}km`
-        )
-        .on("click", () =>
-          onSelectSection(isSelected ? null : section.section_id)
-        )
-        .addTo(group);
-    }
+    const icon = L.divIcon({
+      html: `<div style="background:${bg};color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,.4)">${symbol}</div>`,
+      className: "",
+      iconAnchor: [11, 11],
+    });
+
+    L.marker([section.parking_lat, section.parking_lng], { icon })
+      .bindTooltip(
+        `<strong>${isLot ? "Parking lot" : "Street parking"}</strong><br>${section.parking_name}<br>Section ${section.section_id} · ${section.total_km}km`
+      )
+      .on("click", () => onSelectSection(null))
+      .addTo(group);
   }, [sections, selectedSectionId, onSelectSection]);
 
   return (
