@@ -25,3 +25,27 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Caches
+.cache/
+.pytest_cache/
+backend/cache/
+backend/.cache/
+*.pkl
+
+# City Scour data dumps (user-supplied, not source)
+City_Boundary/
+City_Boundary.csv
+City_Boundary.geojson
+City_Boundary.kml
