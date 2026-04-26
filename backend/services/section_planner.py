@@ -178,6 +178,7 @@ def _edge_features(G: nx.MultiDiGraph, edge_keys: list[tuple], section_id: int) 
             geom_dict = shp_mapping(geom)
         highway = _normalize_str(data.get("highway", ""))
         name = _normalize_str(data.get("name", ""))
+        access = _normalize_str(data.get("access", "")).lower()
         length_raw = _clean(data.get("length", 0), 0)
         feats.append({
             "type": "Feature",
@@ -192,6 +193,8 @@ def _edge_features(G: nx.MultiDiGraph, edge_keys: list[tuple], section_id: int) 
                 "highway": highway,
                 "is_highway": highway in {"primary", "primary_link", "secondary", "secondary_link"},
                 "length": float(length_raw) if length_raw else 0.0,
+                "access": access,
+                "is_private": access == "private",
             },
         })
     return feats
@@ -218,6 +221,7 @@ def _section_dict(
         bbox = [min(xs), min(ys), max(xs), max(ys)]
     else:
         bbox = [parking_lng, parking_lat, parking_lng, parking_lat]
+    is_private = any(bool(f["properties"].get("is_private")) for f in edges)
     return {
         "section_id": section_id,
         "parking_type": parking_type,
@@ -230,6 +234,7 @@ def _section_dict(
         "edge_ids": [f["properties"]["edge_id"] for f in edges],
         "edges": edges,
         "color": _color_for(section_id),
+        "is_private": is_private,
     }
 
 
@@ -365,4 +370,6 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
                     sec["edge_ids"].append(feat[0]["properties"]["edge_id"])
                     sec["total_km"] = round(sec["total_km"] + edge_lengths_km.get(ek, 0.0), 3)
                     sec["estimated_hours"] = round(sec["total_km"] / WALK_SPEED_KMH, 2)
+                    if feat[0]["properties"].get("is_private"):
+                        sec["is_private"] = True
     return sections
