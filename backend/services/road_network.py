@@ -36,7 +36,7 @@ def fetch_road_network(polygon: Polygon | MultiPolygon) -> nx.MultiDiGraph:
         '["highway"!~"motorway|motorway_link|trunk|trunk_link|'
         'abandoned|construction|planned|proposed|raceway|razed"]'
         '["service"!~"private"]'
-        '["access"!~"private|no"]'
+        '["access"!~"no"]'
     )
     G = ox.graph_from_polygon(
         polygon,
