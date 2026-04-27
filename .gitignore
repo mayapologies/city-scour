@@ -38,11 +38,12 @@ venv/
 env/
 
 # Caches
-.cache/
+/.cache/
 .pytest_cache/
 backend/cache/
-backend/.cache/
+backend/.cache/*
 *.pkl
+!backend/.cache/graph_v4.pkl
 
 # City Scour data dumps (user-supplied, not source)
 # City_Boundary.geojson is committed as the bundled default boundary (see backend/main.py).
