@@ -56,12 +56,12 @@ def test_section_total_km_matches_graph(graph, sections):
     assert abs(sec_km - graph_km) < 0.5
 
 
-def test_walks_cover_section_edges(graph, sections):
+def test_walks_cover_section_edges(graph, sections, all_walks_1h):
     """Walks must cover every section edge at least once (overlap allowed)."""
     samples = sorted(sections, key=lambda s: s["total_km"])
     chosen = [samples[0], samples[len(samples) // 2], samples[-1]]
     for sec in chosen:
-        walks = build_walks(sec, graph, hours_per_walk=1.0)
+        walks = all_walks_1h(sec)
         assert len(walks) > 0
         union: set[str] = set()
         for w in walks:
@@ -75,13 +75,13 @@ def test_walks_cover_section_edges(graph, sections):
             )
 
 
-def test_walks_start_at_anchor(graph, sections):
+def test_walks_start_at_anchor(graph, sections, all_walks_1h):
     """Every walk's start equals the section's anchor; route ends are within
     the snapped-node tolerance (~200 m)."""
     samples = sorted(sections, key=lambda s: s["total_km"])
     chosen = [samples[0], samples[len(samples) // 2], samples[-1]]
     for sec in chosen:
-        walks = build_walks(sec, graph, hours_per_walk=1.0)
+        walks = all_walks_1h(sec)
         assert len(walks) > 0
         for w in walks:
             assert abs(w["start"]["lat"] - sec["parking_lat"]) < 1e-6
@@ -103,11 +103,11 @@ def test_walks_start_at_anchor(graph, sections):
                 )
 
 
-def test_walk_id_excludes_spur(graph, sections):
+def test_walk_id_excludes_spur(graph, sections, all_walks_1h):
     """walk_id is hashed from cluster edges only, so it's stable even if the
     spur path changes between graph rebuilds."""
     sec = sorted(sections, key=lambda s: s["total_km"])[len(sections) // 2]
-    walks = build_walks(sec, graph, hours_per_walk=1.0)
+    walks = all_walks_1h(sec)
     assert len(walks) > 0
     sec_edges = set(sec["edge_ids"])
     for w in walks:
@@ -124,12 +124,12 @@ def test_walk_id_excludes_spur(graph, sections):
             assert _walk_id_for(list(w["edge_ids"])) != w["walk_id"]
 
 
-def test_walk_size_constraint(graph, sections):
+def test_walk_size_constraint(graph, sections, all_walks_1h):
     """Walks should respect a soft cap of ~1.5x target_km for hours_per_walk."""
     sec = sorted(sections, key=lambda s: s["total_km"])[len(sections) // 2]
     target_km = 1.0 * WALK_SPEED_KMH  # 5 km
     hard_cap = 1.5 * target_km
-    walks = build_walks(sec, graph, hours_per_walk=1.0)
+    walks = all_walks_1h(sec)
     for w in walks:
         # total_km here is route distance (incl. backtracks).
         # Only enforce edge-distance cap (sum of unique edge lengths).
@@ -176,13 +176,13 @@ def test_section_marks_private(sections):
         assert isinstance(s["is_private"], bool)
 
 
-def test_walk_marks_private(graph, sections):
+def test_walk_marks_private(graph, sections, all_walks_1h):
     """At least one walk across the private sections should be flagged is_private."""
     private_sections = [s for s in sections if s.get("is_private")]
     assert private_sections, "no private sections to test against"
     found = False
     for sec in private_sections:
-        walks = build_walks(sec, graph, hours_per_walk=1.0)
+        walks = all_walks_1h(sec)
         for w in walks:
             assert "is_private" in w
             assert isinstance(w["is_private"], bool)

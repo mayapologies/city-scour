@@ -31,3 +31,22 @@ def graph():
 @pytest.fixture(scope="session")
 def sections(graph, boundary):
     return build_sections(graph, boundary)
+
+
+@pytest.fixture(scope="session")
+def all_walks_1h(graph):
+    """Lazy session-scoped cache of build_walks(sec, graph, hours_per_walk=1.0).
+
+    Returns a callable `get(section)` that computes walks on first access and
+    memoizes by section_id, so repeated requests across wave2 tests share a
+    single Chinese-Postman pass per section."""
+    from services.walk_planner import build_walks
+    cache: dict[str, list] = {}
+
+    def get(sec):
+        sid = sec["section_id"]
+        if sid not in cache:
+            cache[sid] = build_walks(sec, graph, hours_per_walk=1.0)
+        return cache[sid]
+
+    return get
