@@ -181,7 +181,7 @@ def _walks_for(section: dict, hours_per_walk: float) -> list[dict]:
     key = (section["section_id"], round(float(hours_per_walk), 2))
     if key in cache:
         return cache[key]
-    file_key = f"walks_v3_{key[0]}_{key[1]}"
+    file_key = f"walks_v4_{key[0]}_{key[1]}"
     cached = _load_cache(file_key)
     if cached is not None:
         cache[key] = cached
