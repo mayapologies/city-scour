@@ -26,7 +26,10 @@ jobs:
 
       - name: Run wave2 tests
         working-directory: backend
-        run: python -m pytest tests/test_wave2.py -v --maxfail=3 --timeout=600 -n auto
+        # TODO(perf): test_walk_marks_private iterates 64 private sections.
+        # Could redesign to do schema-check on ~5 samples and early-exit on
+        # existence check. Would drop suite to ~3-4 min. See Wave 4H.3.2.
+        run: python -m pytest tests/test_wave2.py -v --maxfail=3 --timeout=1200 -n auto
 
   frontend-build:
     name: Frontend build (vite)
