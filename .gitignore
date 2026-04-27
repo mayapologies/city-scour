@@ -45,7 +45,7 @@ backend/.cache/
 *.pkl
 
 # City Scour data dumps (user-supplied, not source)
+# City_Boundary.geojson is committed as the bundled default boundary (see backend/main.py).
 City_Boundary/
 City_Boundary.csv
-City_Boundary.geojson
 City_Boundary.kml
