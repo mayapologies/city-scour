@@ -11,3 +11,4 @@ scipy==1.13.1
 numpy==1.26.4
 scikit-learn==1.8.0
 pytest==9.0.3
+pytest-timeout==2.4.0
