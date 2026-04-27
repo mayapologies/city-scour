@@ -26,7 +26,7 @@ jobs:
 
       - name: Run wave2 tests
         working-directory: backend
-        run: python -m pytest tests/test_wave2.py -v --maxfail=3 --timeout=600
+        run: python -m pytest tests/test_wave2.py -v --maxfail=3 --timeout=600 -n auto
 
   frontend-build:
     name: Frontend build (vite)
