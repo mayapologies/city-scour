@@ -10,6 +10,7 @@ Spur edges may overlap with other walks' spurs; that's expected. ``walk_id``
 hashes only the cluster edges so it stays stable across spur recomputation.
 """
 import hashlib
+import logging
 import math
 import os
 from collections import deque
@@ -17,7 +18,13 @@ from collections import deque
 import networkx as nx
 from shapely.geometry import mapping
 
-from .route_optimizer import optimize_section_route, optimize_open_cpp_route
+from .route_optimizer import (
+    optimize_section_route,
+    optimize_open_cpp_route,
+    optimize_rural_postman_route,
+)
+
+log = logging.getLogger(__name__)
 
 
 WALK_SPEED_KMH = 5.0
@@ -415,6 +422,9 @@ def _cluster_to_walk(
     anchor_node,
     anchor_lat: float,
     anchor_lng: float,
+    *,
+    use_rpp: bool = False,
+    rpp_telemetry_out: list | None = None,
 ) -> dict | None:
     """Build a walk dict: spur_in + CPP cluster loop + spur_out."""
     feature_by_key: dict[tuple, dict] = {}
@@ -434,16 +444,37 @@ def _cluster_to_walk(
         cluster_nodes.add(p["u"])
         cluster_nodes.add(p["v"])
 
-    # Wave 4A: prefer edge-disjoint spurs (in via one street, out via another)
-    # combined with an open Eulerian path across the cluster.
+    # Wave 5: optional Frederickson RPP path (USE_RPP=1). On success, the
+    # returned features form a closed circuit anchor→…→anchor with the spur
+    # baked in; spur_in/out lists stay empty.
     spur_in_feats: list[dict] = []
     spur_out_feats: list[dict] = []
     cpp_features: list[dict] = []
-    edge_disjoint = _try_edge_disjoint_walk(
-        cluster_features, cluster_edge_ids, cluster_nodes,
-        full_G, full_UG, anchor_node, anchor_lat, anchor_lng,
-    )
-    if edge_disjoint is not None:
+    rpp_features = None
+    if use_rpp:
+        cluster_id = _walk_id_for(cluster_edge_ids)
+        rpp_features, _rpp_cost, telem = optimize_rural_postman_route(
+            cluster_features, anchor_node, full_UG, cluster_id=cluster_id,
+        )
+        log.info(
+            "rpp cluster=%s odd=%d used=%s capped=%s timed_out=%s elapsed_ms=%.1f km=%.3f",
+            telem["cluster_id"], telem["odd_node_count"], telem["used_rpp"],
+            telem["capped"], telem["timed_out"], telem["elapsed_ms"],
+            telem["km_result"],
+        )
+        if rpp_telemetry_out is not None:
+            rpp_telemetry_out.append(telem)
+    if rpp_features is not None:
+        cpp_features = rpp_features
+        edge_disjoint = "_rpp_used_"  # sentinel: skip the legacy branches
+    else:
+        edge_disjoint = _try_edge_disjoint_walk(
+            cluster_features, cluster_edge_ids, cluster_nodes,
+            full_G, full_UG, anchor_node, anchor_lat, anchor_lng,
+        )
+    if edge_disjoint == "_rpp_used_":
+        pass  # cpp_features already populated by RPP
+    elif edge_disjoint is not None:
         spur_in_feats = edge_disjoint["_spur_in_feats"]
         spur_out_feats = edge_disjoint["_spur_out_feats"]
         cpp_features = edge_disjoint["_cpp_feats"]
@@ -578,11 +609,25 @@ def build_walks(
     if section_seed is None:
         return []
     clusters = _peel_clusters(UG, section_seed, target_km)
+    use_rpp = os.environ.get("USE_RPP") == "1"
+    rpp_telem: list[dict] = [] if use_rpp else []
     walks: list[dict] = []
     for cluster in clusters:
         w = _cluster_to_walk(
             cluster, section, full_G, full_UG, anchor_node, anchor_lat, anchor_lng,
+            use_rpp=use_rpp,
+            rpp_telemetry_out=rpp_telem if use_rpp else None,
         )
         if w is not None:
             walks.append(w)
+    if use_rpp:
+        n_total = len(rpp_telem)
+        n_used = sum(1 for t in rpp_telem if t["used_rpp"])
+        n_capped = sum(1 for t in rpp_telem if t["capped"])
+        n_timed_out = sum(1 for t in rpp_telem if t["timed_out"])
+        total_km = sum(w["total_km"] for w in walks)
+        log.info(
+            "rpp_section section=%s n_clusters_total=%d n_used_rpp=%d n_capped=%d n_timed_out=%d total_km=%.3f",
+            section.get("section_id"), n_total, n_used, n_capped, n_timed_out, total_km,
+        )
     return walks
