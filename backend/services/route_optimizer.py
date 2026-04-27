@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 # Min-weight perfect matching is O(n^3). Cap the odd-vertex count of the
 # Frederickson R-graph; clusters past this threshold fall back to closed-CPP.
-MAX_RPP_ODD_NODES = 30
+MAX_RPP_ODD_NODES = 50
 RPP_TIMEOUT_S = 10.0
 
 

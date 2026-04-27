@@ -444,9 +444,9 @@ def _cluster_to_walk(
         cluster_nodes.add(p["u"])
         cluster_nodes.add(p["v"])
 
-    # Wave 5: optional Frederickson RPP path (USE_RPP=1). On success, the
-    # returned features form a closed circuit anchor→…→anchor with the spur
-    # baked in; spur_in/out lists stay empty.
+    # Wave 5: Frederickson RPP path is on by default (set USE_RPP=0 to disable).
+    # On success, the returned features form a closed circuit anchor→…→anchor
+    # with the spur baked in; spur_in/out lists stay empty.
     spur_in_feats: list[dict] = []
     spur_out_feats: list[dict] = []
     cpp_features: list[dict] = []
@@ -609,7 +609,7 @@ def build_walks(
     if section_seed is None:
         return []
     clusters = _peel_clusters(UG, section_seed, target_km)
-    use_rpp = os.environ.get("USE_RPP") == "1"
+    use_rpp = os.environ.get("USE_RPP", "1") != "0"
     rpp_telem: list[dict] = [] if use_rpp else []
     walks: list[dict] = []
     for cluster in clusters:
