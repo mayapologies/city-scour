@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { GeoFeature } from "../../types";
+import JSZip from "jszip";
 import {
-  buildSectionGpx,
+  buildSectionZip,
   buildWalkGpx,
   concatEdgeCoords,
-  gpxFilenameForSection,
   gpxFilenameForWalk,
   sanitizeForFilename,
+  zipFilenameForSection,
   type ParkingAnchor,
 } from "../gpx";
 
@@ -56,8 +57,8 @@ describe("gpx filenames", () => {
     expect(gpxFilenameForWalk("Cupertino, CA", 170, 3)).toBe(
       "cupertino-ca-section-170-walk-3.gpx",
     );
-    expect(gpxFilenameForSection("San José", 42)).toBe(
-      "san-jose-section-42-walks.gpx",
+    expect(zipFilenameForSection("San José", 42)).toBe(
+      "san-jose-section-42-walks.zip",
     );
   });
 });
@@ -265,7 +266,7 @@ describe("buildWalkGpx", () => {
   });
 });
 
-describe("buildSectionGpx", () => {
+describe("buildSectionZip", () => {
   const w1 = [
     lineEdge([
       [-122.05, 37.32],
@@ -278,42 +279,49 @@ describe("buildSectionGpx", () => {
       [-122.06, 37.31],
     ]),
   ];
-  const gpx = buildSectionGpx(
-    {
-      cityName: "Cupertino, CA",
-      sectionId: 170,
-      sectionName: "Oak Valley",
-      parking: PARKING,
-      walks: [
-        { walkIndex: 1, walkTotal: 2, totalKm: 2.0, edges: w1 },
-        { walkIndex: 2, walkTotal: 2, totalKm: 2.5, edges: w2 },
-      ],
-    },
-    NOW,
-  );
+  const sectionInput = {
+    cityName: "Cupertino, CA",
+    sectionId: 170,
+    sectionName: "Oak Valley",
+    parking: PARKING,
+    walks: [
+      { walkIndex: 1, walkTotal: 2, totalKm: 2.0, edges: w1 },
+      { walkIndex: 2, walkTotal: 2, totalKm: 2.5, edges: w2 },
+    ],
+  };
 
-  it("includes one <wpt> and N <trk> elements for N walks", () => {
-    expect(countMatches(gpx, /<wpt /g)).toBe(1);
-    expect(countMatches(gpx, /<trk>/g)).toBe(2);
+  it("returns a Blob with content-type application/zip", async () => {
+    const blob = await buildSectionZip(sectionInput, NOW);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.type).toBe("application/zip");
   });
 
-  it("preserves the supplied walk order in the track names", () => {
-    const walk1Idx = gpx.indexOf("Walk 1 of 2");
-    const walk2Idx = gpx.indexOf("Walk 2 of 2");
-    expect(walk1Idx).toBeGreaterThan(-1);
-    expect(walk2Idx).toBeGreaterThan(walk1Idx);
+  it("contains exactly one entry per walk, named via gpxFilenameForWalk", async () => {
+    const blob = await buildSectionZip(sectionInput, NOW);
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const names = Object.keys(zip.files).sort();
+    expect(names).toEqual([
+      gpxFilenameForWalk("Cupertino, CA", 170, 1),
+      gpxFilenameForWalk("Cupertino, CA", 170, 2),
+    ]);
   });
 
-  it("computes bounds across the union of all tracks", () => {
-    const m = gpx.match(
-      /<bounds minlat="([-\d.]+)" minlon="([-\d.]+)" maxlat="([-\d.]+)" maxlon="([-\d.]+)"/,
-    );
-    expect(m).not.toBeNull();
-    const [, minlat, minlon, maxlat, maxlon] = m!;
-    expect(parseFloat(minlat)).toBeCloseTo(37.31, 5);
-    expect(parseFloat(maxlat)).toBeCloseTo(37.33, 5);
-    expect(parseFloat(minlon)).toBeCloseTo(-122.06, 5);
-    expect(parseFloat(maxlon)).toBeCloseTo(-122.04, 5);
+  it("each entry is a valid GPX 1.1 doc with metadata <name> and at least one <trk>", async () => {
+    const blob = await buildSectionZip(sectionInput, NOW);
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    for (const walkIndex of [1, 2]) {
+      const name = gpxFilenameForWalk("Cupertino, CA", 170, walkIndex);
+      const content = await zip.file(name)!.async("string");
+      expect(content.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
+      expect(content).toContain('<gpx version="1.1" creator="City Scour"');
+      expect(content).toContain(
+        "<name>City Scour — Cupertino, CA — Section 170 (Oak Valley)</name>",
+      );
+      expect(countMatches(content, /<trk>/g)).toBe(1);
+      expect(content).toContain(
+        `Walk ${walkIndex} of 2`,
+      );
+    }
   });
 });
 

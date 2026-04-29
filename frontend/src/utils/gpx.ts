@@ -89,12 +89,12 @@ export function gpxFilenameForWalk(
   return `${citySlug}-section-${sectionId}-walk-${walkIndex}.gpx`;
 }
 
-export function gpxFilenameForSection(
+export function zipFilenameForSection(
   cityName: string,
   sectionId: number
 ): string {
   const citySlug = sanitizeForFilename(cityName) || "city";
-  return `${citySlug}-section-${sectionId}-walks.gpx`;
+  return `${citySlug}-section-${sectionId}-walks.zip`;
 }
 
 function approxEqual(a: number[], b: number[]): boolean {
@@ -323,47 +323,33 @@ export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): strin
   );
 }
 
-export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()): string {
-  const allPoints: LatLon[] = [];
-  const tracks: string[] = [];
-  const isoTime = now.toISOString();
-  const startMs = now.getTime();
+export async function buildSectionZip(
+  input: SectionGpxInput,
+  now: Date = new Date(),
+): Promise<Blob> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
   for (const w of input.walks) {
-    const points = concatEdgeCoords(w.edges);
-    allPoints.push(...points);
-    tracks.push(
-      buildTrack(
-        walkTrackInfo(
-          input.cityName,
-          input.sectionId,
-          input.sectionName,
-          w.walkIndex,
-          w.walkTotal,
-          w.totalKm,
-          w.edges,
-          points
-        ),
-        startMs,
-      )
+    const gpx = buildWalkGpx(
+      {
+        cityName: input.cityName,
+        sectionId: input.sectionId,
+        sectionName: input.sectionName,
+        walkIndex: w.walkIndex,
+        walkTotal: w.walkTotal,
+        totalKm: w.totalKm,
+        edges: w.edges,
+        parking: input.parking,
+      },
+      now,
     );
+    const name = gpxFilenameForWalk(input.cityName, input.sectionId, w.walkIndex);
+    zip.file(name, gpx);
   }
-  const bounds = bboxOfPoints(allPoints);
-  const body = [
-    buildParkingWpt(input.parking, input.sectionId, input.cityName, isoTime),
-    ...tracks,
-  ];
-  return gpxDocument(
-    input.cityName,
-    input.sectionId,
-    input.sectionName,
-    bounds,
-    body,
-    isoTime,
-  );
+  return zip.generateAsync({ type: "blob", mimeType: "application/zip" });
 }
 
-export function triggerGpxDownload(filename: string, content: string): void {
-  const blob = new Blob([content], { type: "application/gpx+xml" });
+export function triggerBlobDownload(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -372,4 +358,8 @@ export function triggerGpxDownload(filename: string, content: string): void {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export function triggerGpxDownload(filename: string, content: string): void {
+  triggerBlobDownload(filename, new Blob([content], { type: "application/gpx+xml" }));
 }

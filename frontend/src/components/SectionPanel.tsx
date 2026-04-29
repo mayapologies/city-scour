@@ -10,11 +10,12 @@ import {
 } from "../utils/storage";
 import { api } from "../utils/api";
 import {
-  buildSectionGpx,
+  buildSectionZip,
   buildWalkGpx,
-  gpxFilenameForSection,
   gpxFilenameForWalk,
+  triggerBlobDownload,
   triggerGpxDownload,
+  zipFilenameForSection,
   type ParkingAnchor,
 } from "../utils/gpx";
 
@@ -134,7 +135,7 @@ export function SectionPanel({
       const details = await Promise.all(
         walks.map((w) => api.getWalk(section.section_id, w.walk_id, hoursPerWalk)),
       );
-      const gpx = buildSectionGpx({
+      const blob = await buildSectionZip({
         cityName,
         sectionId: section.section_id,
         sectionName: customSectionName(section),
@@ -146,12 +147,12 @@ export function SectionPanel({
           edges: details[i].route_features,
         })),
       });
-      triggerGpxDownload(
-        gpxFilenameForSection(cityName, section.section_id),
-        gpx,
+      triggerBlobDownload(
+        zipFilenameForSection(cityName, section.section_id),
+        blob,
       );
     } catch (err) {
-      console.error("Section GPX download failed", err);
+      console.error("Section ZIP download failed", err);
     } finally {
       setDownloadingSectionId(null);
     }
@@ -398,11 +399,11 @@ export function SectionPanel({
                 downloadingSectionId === selectedSection.section_id
               }
               onClick={() => handleDownloadSection(selectedSection)}
-              title="Download all walks as a single GPX file"
+              title="Download all walks as a ZIP of per-walk GPX files"
             >
               {downloadingSectionId === selectedSection.section_id
-                ? "⏳ Building GPX…"
-                : "📥 Download all walks (.gpx)"}
+                ? "⏳ Building ZIP…"
+                : "📥 Download all walks (.zip)"}
             </button>
           </div>
 
