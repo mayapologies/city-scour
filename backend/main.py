@@ -1,7 +1,9 @@
 """City Scour — FastAPI backend."""
+import hashlib
 import json
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -149,6 +151,7 @@ def get_sections(force_refresh: bool = False):
     cached = _load_cache(cache_key)
     if not force_refresh and cached is not None:
         _state["sections"] = cached
+        _prune_orphan_walks_v5(cached)
         return cached
 
     try:
@@ -160,6 +163,7 @@ def get_sections(force_refresh: bool = False):
     _state["sections"] = sections
     # Invalidate any in-memory walks cache when sections change
     _state["walks_cache"] = {}
+    _prune_orphan_walks_v5(sections)
     return sections
 
 
@@ -173,15 +177,27 @@ def _get_section_or_404(section_id: int) -> dict:
     return matching[0]
 
 
+def _section_edges_hash(section: dict) -> str:
+    """Stable 8-hex-char digest of a section's edge set.
+
+    Used so the walks cache auto-invalidates whenever a re-partition changes
+    which edges belong to a section_id."""
+    edge_ids = section.get("edge_ids", []) or []
+    joined = ",".join(sorted(edge_ids))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:8]
+
+
 def _walks_for(section: dict, hours_per_walk: float) -> list[dict]:
     G = _state.get("graph")
     if G is None:
         raise HTTPException(400, "Road graph not available.")
     cache = _state.setdefault("walks_cache", {})
-    key = (section["section_id"], round(float(hours_per_walk), 2))
+    edges_hash = _section_edges_hash(section)
+    hpw = round(float(hours_per_walk), 2)
+    key = (section["section_id"], edges_hash, hpw)
     if key in cache:
         return cache[key]
-    file_key = f"walks_v4_{key[0]}_{key[1]}"
+    file_key = f"walks_v5_{key[0]}_{edges_hash}_{hpw}"
     cached = _load_cache(file_key)
     if cached is not None:
         cache[key] = cached
@@ -193,6 +209,31 @@ def _walks_for(section: dict, hours_per_walk: float) -> list[dict]:
     cache[key] = walks
     _save_cache(file_key, walks)
     return walks
+
+
+_WALKS_V5_RE = re.compile(r"^walks_v5_(\d+)_([0-9a-f]{8})_.+\.pkl$")
+
+
+def _prune_orphan_walks_v5(sections: list[dict]) -> int:
+    """Delete walks_v5_*.pkl files whose (section_id, edges_hash) tuple no
+    longer matches any current section. Returns the count removed."""
+    valid: set[tuple[int, str]] = {
+        (s["section_id"], _section_edges_hash(s)) for s in sections
+    }
+    removed = 0
+    for p in CACHE_DIR.glob("walks_v5_*.pkl"):
+        m = _WALKS_V5_RE.match(p.name)
+        if not m:
+            continue
+        sid = int(m.group(1))
+        h = m.group(2)
+        if (sid, h) not in valid:
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 @app.get("/api/sections/{section_id}/walks")
