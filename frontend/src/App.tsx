@@ -55,7 +55,7 @@ export default function App() {
   // When a section is selected, ensure its walks are loaded for the current hours-per-walk.
   useEffect(() => {
     if (selectedSectionId === null) return;
-    if (walksBySection[selectedSectionId]) return;
+    if ((walksBySection[selectedSectionId]?.length ?? 0) > 0) return;
     setLoadingWalks(true);
     api
       .getSectionWalks(selectedSectionId, hoursPerWalk)
@@ -85,7 +85,7 @@ export default function App() {
       setWalksBySection((prev) => {
         const next = { ...prev };
         for (const [sid, ws] of results) {
-          if (!next[sid]) next[sid] = ws;
+          if ((next[sid]?.length ?? 0) === 0 && ws.length > 0) next[sid] = ws;
         }
         return next;
       });
