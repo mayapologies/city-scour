@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Section, EdgeStatus, Progress, Walk } from "../types";
 import {
   getOverallStats,
   computeSectionStatus,
   isWalkComplete,
+  loadSectionNames,
+  saveSectionName,
 } from "../utils/storage";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -64,7 +66,18 @@ export function SectionPanel({
   const [showSettings, setShowSettings] = useState(false);
   const [hoursDraft, setHoursDraft] = useState(hoursPerWalk);
   const [hideCompleted, setHideCompleted] = useState(false);
+  const [sectionNames, setSectionNames] = useState<Record<number, string>>(() =>
+    loadSectionNames()
+  );
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
   const stats = getOverallStats(sections, walksBySection, progress);
+
+  const displayName = (id: number) => sectionNames[id] ?? `Section ${id}`;
+
+  useEffect(() => {
+    setEditingName(false);
+  }, [selectedSectionId]);
 
   const isSectionFullyComplete = (sectionId: number): boolean => {
     const ws = walksBySection[sectionId];
@@ -205,9 +218,44 @@ export function SectionPanel({
       {selectedSection && (
         <div style={sectionDetailStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 600, color: "#e2e8f0" }}>
-              Section {selectedSection.section_id}
-            </div>
+            {editingName ? (
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onFocus={(e) => e.currentTarget.select()}
+                onBlur={() => {
+                  setSectionNames(
+                    saveSectionName(selectedSection.section_id, nameDraft)
+                  );
+                  setEditingName(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    setSectionNames(
+                      saveSectionName(selectedSection.section_id, nameDraft)
+                    );
+                    setEditingName(false);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setEditingName(false);
+                  }
+                }}
+                style={nameInputStyle}
+              />
+            ) : (
+              <div
+                style={{ fontWeight: 600, color: "#e2e8f0", cursor: "pointer" }}
+                title="Double-click to rename"
+                onDoubleClick={() => {
+                  setNameDraft(displayName(selectedSection.section_id));
+                  setEditingName(true);
+                }}
+              >
+                {displayName(selectedSection.section_id)}
+              </div>
+            )}
             <button
               style={closeBtnStyle}
               onClick={() => onSelectSection(null)}
@@ -609,6 +657,19 @@ const closeBtnStyle: React.CSSProperties = {
   cursor: "pointer",
   color: "#64748b",
   fontSize: 16,
+};
+
+const nameInputStyle: React.CSSProperties = {
+  fontWeight: 600,
+  color: "#e2e8f0",
+  background: "#1e293b",
+  border: "1px solid #334155",
+  borderRadius: 4,
+  padding: "2px 6px",
+  fontSize: "inherit",
+  fontFamily: "inherit",
+  width: "100%",
+  maxWidth: 200,
 };
 
 const primaryBtnStyle: React.CSSProperties = {

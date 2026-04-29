@@ -1,6 +1,47 @@
 import type { EdgeStatus, Progress, Section, Walk } from "../types";
 
 const STORAGE_KEY = "city-scour-progress";
+const SECTION_NAMES_KEY = "city-scour-section-names";
+
+export function loadSectionNames(): Record<number, string> {
+  try {
+    const raw = localStorage.getItem(SECTION_NAMES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      const result: Record<number, string> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === "string" && v.length > 0) {
+          const id = Number(k);
+          if (Number.isFinite(id)) result[id] = v;
+        }
+      }
+      return result;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return {};
+}
+
+export function saveSectionName(
+  sectionId: number,
+  name: string
+): Record<number, string> {
+  const all = loadSectionNames();
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    delete all[sectionId];
+  } else {
+    all[sectionId] = trimmed;
+  }
+  try {
+    localStorage.setItem(SECTION_NAMES_KEY, JSON.stringify(all));
+  } catch {
+    // ignore quota errors
+  }
+  return all;
+}
 
 // Walking pace in km/h (used for hours-walked / hours-remaining stats).
 const WALK_KMH = 5.0;
