@@ -36,7 +36,7 @@ function edgeColor(
   if (isPrivate) return "#a78bfa";
   if (isHighway) return "#94a3b8";
   if (selectedSectionId !== null && sectionId === selectedSectionId) {
-    return "#fff";
+    return "#22d3ee";
   }
   return sectionId !== undefined ? sectionColor(sectionId) : "#94a3b8";
 }
