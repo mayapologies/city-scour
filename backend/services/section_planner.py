@@ -23,6 +23,7 @@ POCKET_RADIUS_M = 600.0         # edges farther than this become "street" sectio
 DBSCAN_EPS_M = 250.0            # cluster pocket edges within this distance
 DBSCAN_MIN_SAMPLES = 3
 MAX_SECTION_KM = 30.0           # split sections larger than this via k-means
+MIN_COMPONENT_EDGES = 3         # connected-component fragments smaller than this are dropped
 
 
 def _clean(v, default=""):
@@ -139,6 +140,60 @@ def _meters_per_deg_lat() -> float:
 
 def _meters_per_deg_lng(lat_deg: float) -> float:
     return 111_320.0 * math.cos(math.radians(lat_deg))
+
+
+def _split_connected_components(
+    edge_keys_in_section: list[tuple],
+) -> list[list[tuple]]:
+    """Split a section's edges into graph-connected components (undirected).
+
+    Uses an undirected helper graph built from the section's `(u_min, u_max, k)`
+    edge keys. Components smaller than `MIN_COMPONENT_EDGES` are dropped; their
+    edges fall through to the orphan-repair step in `build_sections`, which now
+    re-attaches by graph-adjacency to preserve per-section connectivity.
+    """
+    if not edge_keys_in_section:
+        return []
+    UG = nx.Graph()
+    for u, v, _k in edge_keys_in_section:
+        UG.add_edge(u, v)
+    if UG.number_of_edges() == 0:
+        return []
+    comps = list(nx.connected_components(UG))
+    if len(comps) <= 1:
+        return [edge_keys_in_section]
+    node_to_comp: dict[int, int] = {}
+    for ci, nodes in enumerate(comps):
+        for n in nodes:
+            node_to_comp[n] = ci
+    grouped: dict[int, list[tuple]] = {}
+    for ek in edge_keys_in_section:
+        u, _v, _k = ek
+        grouped.setdefault(node_to_comp[u], []).append(ek)
+    # Drop tiny fragments; documented choice per Wave 5F.2 spec.
+    return [eks for eks in grouped.values() if len(eks) >= MIN_COMPONENT_EDGES]
+
+
+def _closest_node_in_component(
+    G: nx.MultiDiGraph,
+    component_nodes: set[int],
+    ref_lat: float,
+    ref_lng: float,
+) -> tuple[float, float]:
+    """Return (lat, lng) of the road-graph node in `component_nodes` closest to
+    the parent anchor. Falls back to the parent coordinate if nodes lack x/y."""
+    best_lat, best_lng = ref_lat, ref_lng
+    best_d = float("inf")
+    for n in component_nodes:
+        nd = G.nodes.get(n, {})
+        nx_, ny_ = nd.get("x"), nd.get("y")
+        if nx_ is None or ny_ is None:
+            continue
+        d = _haversine_m(float(ny_), float(nx_), ref_lat, ref_lng)
+        if d < best_d:
+            best_d = d
+            best_lat, best_lng = float(ny_), float(nx_)
+    return best_lat, best_lng
 
 
 def _split_oversized(
@@ -338,15 +393,55 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
         nonlocal next_id
         if not cluster_keys:
             return
-        anchor_key = _anchor_key(parking_type, lot, lat, lng)
-        for sub in _split_oversized(cluster_keys, edge_mids, edge_lengths_km):
-            if not sub:
-                continue
-            sections.append(_section_dict(
-                next_id, sub, G, edge_lengths_km,
-                parking_type, name, lat, lng, anchor_key,
-            ))
-            next_id += 1
+        # First, split by graph-connected component (Wave 5F.2 Bug C). DBSCAN
+        # in lat/lng space can merge geometry that is physically separated by
+        # buildings, freeways, or creeks. We post-process here so every emitted
+        # section's induced subgraph is a single connected component.
+        components = _split_connected_components(cluster_keys)
+        if not components:
+            return
+        parent_anchor_key = _anchor_key(parking_type, lot, lat, lng)
+        if len(components) == 1:
+            for sub in _split_oversized(components[0], edge_mids, edge_lengths_km):
+                if not sub:
+                    continue
+                sections.append(_section_dict(
+                    next_id, sub, G, edge_lengths_km,
+                    parking_type, name, lat, lng, parent_anchor_key,
+                ))
+                next_id += 1
+            return
+        # Multiple components: the component closest to the parent anchor
+        # inherits the parent (lot or street) anchor; siblings get a derived
+        # street-style anchor at their own road-graph node nearest to the
+        # parent anchor, keeping anchor_keys unique and stable across runs.
+        comp_info: list[tuple[float, list[tuple], float, float]] = []
+        for comp_eks in components:
+            comp_nodes: set[int] = set()
+            for u, v, _k in comp_eks:
+                comp_nodes.add(u); comp_nodes.add(v)
+            blat, blng = _closest_node_in_component(G, comp_nodes, lat, lng)
+            d = _haversine_m(blat, blng, lat, lng)
+            comp_info.append((d, comp_eks, blat, blng))
+        comp_info.sort(key=lambda t: (t[0], t[2], t[3]))
+        for idx, (_d, comp_eks, blat, blng) in enumerate(comp_info):
+            if idx == 0:
+                c_type, c_name, c_lat, c_lng, c_key = (
+                    parking_type, name, lat, lng, parent_anchor_key,
+                )
+            else:
+                c_type = "street"
+                c_name = "Street parking"
+                c_lat, c_lng = blat, blng
+                c_key = _anchor_key("street", None, blat, blng)
+            for sub in _split_oversized(comp_eks, edge_mids, edge_lengths_km):
+                if not sub:
+                    continue
+                sections.append(_section_dict(
+                    next_id, sub, G, edge_lengths_km,
+                    c_type, c_name, c_lat, c_lng, c_key,
+                ))
+                next_id += 1
 
     for i, lot in enumerate(lots):
         _emit(lot_assignments.get(i, []), "lot", lot["name"], lot["lat"], lot["lng"], lot)
@@ -375,17 +470,37 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
     if duplicates:
         print(f"[section_planner] WARN: {len(duplicates)} duplicated edges across sections; first: {duplicates[:3]}")
     if orphans:
-        print(f"[section_planner] WARN: {len(orphans)} orphan edges; attaching to nearest section")
-        # Repair: append each orphan to the section whose anchor is closest
+        print(f"[section_planner] WARN: {len(orphans)} orphan edges; attaching by graph adjacency")
+        # Repair: prefer attaching each orphan to a section that already
+        # contains an edge sharing one of the orphan's endpoints, so per-section
+        # graph connectivity (Wave 5F.2) is preserved. Fall back to nearest
+        # section by anchor distance when no graph-adjacent section exists.
         if sections:
+            node_to_sections: dict[int, set[int]] = {}
+            for sec_idx, s in enumerate(sections):
+                for f in s["edges"]:
+                    p = f["properties"]
+                    node_to_sections.setdefault(int(p["u"]), set()).add(sec_idx)
+                    node_to_sections.setdefault(int(p["v"]), set()).add(sec_idx)
             anchor_arr = np.array([(s["parking_lat"], s["parking_lng"]) for s in sections], dtype=float)
             for ek in orphans:
-                lat, lng = edge_mids[ek]
-                mlat = _meters_per_deg_lat(); mlng = _meters_per_deg_lng(lat)
-                dlat = (anchor_arr[:, 0] - lat) * mlat
-                dlng = (anchor_arr[:, 1] - lng) * mlng
-                d = np.sqrt(dlat*dlat + dlng*dlng)
-                best = int(np.argmin(d))
+                u, v, _k = ek
+                adj = node_to_sections.get(int(u), set()) | node_to_sections.get(int(v), set())
+                if adj:
+                    lat, lng = edge_mids[ek]
+                    best = min(
+                        adj,
+                        key=lambda i: _haversine_m(
+                            sections[i]["parking_lat"], sections[i]["parking_lng"], lat, lng,
+                        ),
+                    )
+                else:
+                    lat, lng = edge_mids[ek]
+                    mlat = _meters_per_deg_lat(); mlng = _meters_per_deg_lng(lat)
+                    dlat = (anchor_arr[:, 0] - lat) * mlat
+                    dlng = (anchor_arr[:, 1] - lng) * mlng
+                    d = np.sqrt(dlat*dlat + dlng*dlng)
+                    best = int(np.argmin(d))
                 sec = sections[best]
                 feat = _edge_features(G, [ek], sec["section_id"])
                 if feat:
@@ -395,4 +510,6 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
                     sec["estimated_hours"] = round(sec["total_km"] / WALK_SPEED_KMH, 2)
                     if feat[0]["properties"].get("is_private"):
                         sec["is_private"] = True
+                    node_to_sections.setdefault(int(u), set()).add(best)
+                    node_to_sections.setdefault(int(v), set()).add(best)
     return sections
