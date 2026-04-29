@@ -28,12 +28,10 @@ function edgeColor(
   isHighway: boolean,
   sectionId: number | undefined,
   selectedSectionId: number | null,
-  progress: Progress,
-  isPrivate: boolean
+  progress: Progress
 ): string {
   const status = progress.edges[edgeId];
   if (status === "complete") return "#22c55e";
-  if (isPrivate) return "#a78bfa";
   if (isHighway) return "#94a3b8";
   if (selectedSectionId !== null && sectionId === selectedSectionId) {
     return "#22d3ee";
@@ -146,22 +144,18 @@ export function MapView({
           props.is_highway,
           sid,
           selectedSectionId,
-          progress,
-          isPrivate
+          progress
         );
-        const weight = isPrivate
-          ? 2
-          : edgeWeight(props.is_highway, isSelected);
-        const baseOpacity =
+        const weight = edgeWeight(props.is_highway, isSelected);
+        const opacity =
           selectedSectionId === null || isSelected ? 1 : 0.3;
-        const opacity = isPrivate ? Math.min(0.65, baseOpacity) : baseOpacity;
 
         const polyline = L.geoJSON(feat as GeoJSON.Feature, {
           style: {
             color,
             weight,
             opacity,
-            dashArray: isPrivate ? "4 4" : undefined,
+            dashArray: isPrivate ? "8 4" : undefined,
           },
         });
 
