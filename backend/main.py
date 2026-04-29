@@ -53,6 +53,37 @@ def _load_cache(key: str):
     return None
 
 
+def _ensure_state_loaded() -> None:
+    """Rehydrate `_state` from disk caches after a backend restart.
+
+    Fast no-op when boundary/graph/sections are already in memory. Only
+    rehydrates when all three of boundary_v1.pkl, graph_v5.pkl, and
+    sections_v8.pkl exist on disk; otherwise leaves `_state` untouched so
+    the existing 400 paths still fire."""
+    if (
+        "boundary" in _state
+        and "graph" in _state
+        and "sections" in _state
+    ):
+        return
+    if not (
+        _cache_path("boundary_v1").exists()
+        and _cache_path("graph_v5").exists()
+        and _cache_path("sections_v8").exists()
+    ):
+        return
+    boundary = _load_cache("boundary_v1")
+    graph = _load_cache("graph_v5")
+    sections = _load_cache("sections_v8")
+    if boundary is None or graph is None or sections is None:
+        return
+    _state["boundary"] = boundary
+    _state["graph"] = graph
+    _state["sections"] = sections
+    _state["walks_cache"] = {}
+    _prune_orphan_walks_v5(sections)
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -68,6 +99,7 @@ def get_default_boundary():
         data = f.read()
     poly = parse_geojson(data)
     _state["boundary"] = poly
+    _save_cache("boundary_v1", poly)
     return polygon_to_geojson(poly)
 
 
@@ -93,6 +125,7 @@ async def upload_boundary(file: UploadFile = File(...)):
         raise HTTPException(422, f"Failed to parse boundary: {e}")
 
     _state["boundary"] = poly
+    _save_cache("boundary_v1", poly)
     # Clear cached road/sections when boundary changes
     for key in ["road_geojson", "sections", "graph"]:
         _state.pop(key, None)
@@ -136,6 +169,7 @@ def get_sections(force_refresh: bool = False):
     """
     Build or return cached parking-anchored section plan.
     """
+    _ensure_state_loaded()
     poly = _state.get("boundary")
     G = _state.get("graph")
 
@@ -144,7 +178,7 @@ def get_sections(force_refresh: bool = False):
     if G is None:
         raise HTTPException(400, "Road network not loaded. Call /api/roads first.")
 
-    cache_key = "sections_v7"
+    cache_key = "sections_v8"
     if not force_refresh and "sections" in _state:
         return _state["sections"]
 
@@ -168,6 +202,7 @@ def get_sections(force_refresh: bool = False):
 
 
 def _get_section_or_404(section_id: int) -> dict:
+    _ensure_state_loaded()
     sections = _state.get("sections")
     if sections is None:
         raise HTTPException(400, "Sections not built yet. Call /api/sections first.")
@@ -188,6 +223,7 @@ def _section_edges_hash(section: dict) -> str:
 
 
 def _walks_for(section: dict, hours_per_walk: float) -> list[dict]:
+    _ensure_state_loaded()
     G = _state.get("graph")
     if G is None:
         raise HTTPException(400, "Road graph not available.")
@@ -285,6 +321,7 @@ def _walk_summary(w: dict) -> dict:
 @app.get("/api/stats")
 def get_stats():
     """Return overview stats for the loaded city."""
+    _ensure_state_loaded()
     sections = _state.get("sections", [])
     G = _state.get("graph")
     if G is None:

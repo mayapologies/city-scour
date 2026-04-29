@@ -1,11 +1,15 @@
-"""Wave 5F.2: every section's induced subgraph must be a single connected
-component (undirected). DBSCAN can otherwise group geometry separated by
-buildings/freeways/creeks into one section, producing walks that "teleport".
+"""Wave 5K: the per-section connectivity invariant from Wave 5F.2 is relaxed
+because absorbed street stubs may sit in a separate component of the host
+section's subgraph. The walk planner's BFS-peel already handles this by
+emitting one walk per cluster; the per-walk invariant we still enforce is
+that each walk's combined edges (cluster ∪ spurs) form a single connected
+subgraph (the walker has to actually be able to traverse the route).
 
 Wave 5J: also pins the post-merge invariant that no two street-parking
 sections sit within MERGE_MAX_DIST_M road-metres of each other when their
 combined size would still fit under the merge caps."""
 import networkx as nx
+import pytest
 
 from services.section_planner import (
     MERGE_MAX_COMBINED_EDGES,
@@ -19,28 +23,33 @@ def _parse_edge_id(eid: str) -> tuple[int, int, int]:
     return int(u), int(v), int(k)
 
 
-def _section_subgraph(section: dict) -> nx.Graph:
-    UG = nx.Graph()
-    for eid in section["edge_ids"]:
-        u, v, _k = _parse_edge_id(eid)
-        UG.add_edge(u, v)
-    return UG
-
-
-def test_every_section_is_graph_connected(sections):
-    """For every section, the undirected subgraph induced by edge_ids has
-    exactly one connected component."""
-    offenders: list[tuple[int, int, int]] = []
+@pytest.mark.slow
+def test_every_walk_is_graph_connected(sections, all_walks_1h):
+    """Wave 5K replacement for the Wave 5F.2 per-section invariant: for
+    every section, every walk emitted by `build_walks(section, G,
+    hours_per_walk=1.0)` must have its combined edges (cluster + spurs)
+    form a single connected undirected subgraph. Sections themselves may
+    have multiple components after a Wave 5K absorb-pass; the walk planner
+    splits those into per-cluster walks, each of which the user has to be
+    able to physically walk start-to-end."""
+    offenders: list[tuple[int, str, int, int]] = []
     for s in sections:
-        UG = _section_subgraph(s)
-        if UG.number_of_edges() == 0:
-            continue
-        n_comp = nx.number_connected_components(UG)
-        if n_comp != 1:
-            offenders.append((s["section_id"], n_comp, len(s["edge_ids"])))
+        walks = all_walks_1h(s)
+        for w in walks:
+            UG = nx.Graph()
+            for eid in w["edge_ids"]:
+                u, v, _k = _parse_edge_id(eid)
+                UG.add_edge(u, v)
+            if UG.number_of_edges() == 0:
+                continue
+            n_comp = nx.number_connected_components(UG)
+            if n_comp != 1:
+                offenders.append(
+                    (s["section_id"], w["walk_id"], n_comp, len(w["edge_ids"])),
+                )
     assert not offenders, (
-        f"{len(offenders)} sections are graph-disconnected; first few "
-        f"(section_id, n_components, n_edges): {offenders[:5]}"
+        f"{len(offenders)} walks are graph-disconnected; first few "
+        f"(section_id, walk_id, n_components, n_edges): {offenders[:5]}"
     )
 
 

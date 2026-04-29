@@ -27,6 +27,8 @@ MIN_COMPONENT_EDGES = 3         # connected-component fragments smaller than thi
 MERGE_MAX_DIST_M = 150.0        # Wave 5J: street sections within this on G are merged
 MERGE_MAX_COMBINED_KM = 5.0     # don't fold a stub into a large section
 MERGE_MAX_COMBINED_EDGES = 300  # sanity cap on merged edge count
+ABSORB_MAX_KM = 1.0             # Wave 5K: street stubs under this are absorbed
+ABSORB_MAX_DIST_M = 1000.0      # Wave 5K: max centroid distance to a host section
 
 
 def _clean(v, default=""):
@@ -444,6 +446,110 @@ def _merge_adjacent_street_sections(
     return sections
 
 
+def _section_centroid(section: dict) -> tuple[float, float]:
+    """Geographic centroid of a section, taken as its bbox midpoint."""
+    bbox = section.get("bbox")
+    if bbox and len(bbox) == 4:
+        return (bbox[1] + bbox[3]) / 2.0, (bbox[0] + bbox[2]) / 2.0
+    return float(section.get("parking_lat", 0.0)), float(section.get("parking_lng", 0.0))
+
+
+def _absorb_small_street_sections(
+    sections: list[dict],
+    G: nx.MultiDiGraph,  # noqa: ARG001  (kept for future graph-aware variants)
+) -> list[dict]:
+    """Wave 5K: fold small street-parking stubs into the nearest big section.
+
+    For every section with `parking_type == "street"` and `total_km <
+    ABSORB_MAX_KM`, find the geographically nearest section (centroid
+    haversine) whose `total_km >= ABSORB_MAX_KM` within `ABSORB_MAX_DIST_M`
+    and absorb the stub's edges into that host. Lot-parking sections are
+    never absorbed — they represent real anchors users may want even when
+    tiny. If no host qualifies for a stub it is left as-is. Each absorbed
+    edge feature's `properties.section_id` is rewritten to the host's id;
+    the host's `bbox`, `total_km`, `estimated_hours`, `edge_ids`, and
+    `is_private` are recomputed; the host's parking anchor (key/lat/lng/
+    type/name) is preserved. Section IDs are renumbered (sorted by
+    `parking_anchor_key`) only if any absorption happened, mirroring the
+    Wave 5J pattern.
+    """
+    if len(sections) < 2:
+        return sections
+
+    stub_idxs = sorted(
+        [
+            i for i, s in enumerate(sections)
+            if s.get("parking_type") == "street"
+            and float(s["total_km"]) < ABSORB_MAX_KM
+        ],
+        key=lambda i: float(sections[i]["total_km"]),
+    )
+    host_idxs = [
+        i for i, s in enumerate(sections)
+        if float(s["total_km"]) >= ABSORB_MAX_KM
+    ]
+    if not stub_idxs or not host_idxs:
+        return sections
+
+    centroids: dict[int, tuple[float, float]] = {
+        i: _section_centroid(sections[i]) for i in set(stub_idxs) | set(host_idxs)
+    }
+
+    absorbed_into: dict[int, int] = {}
+    for si in stub_idxs:
+        slat, slng = centroids[si]
+        best: int | None = None
+        best_d = float("inf")
+        for hi in host_idxs:
+            hlat, hlng = centroids[hi]
+            d = _haversine_m(slat, slng, hlat, hlng)
+            if d <= ABSORB_MAX_DIST_M and d < best_d:
+                best = hi
+                best_d = d
+        if best is not None:
+            absorbed_into[si] = best
+
+    if not absorbed_into:
+        return sections
+
+    absorbs_by_host: dict[int, list[int]] = {}
+    for si, hi in absorbed_into.items():
+        absorbs_by_host.setdefault(hi, []).append(si)
+
+    for hi, stubs in absorbs_by_host.items():
+        host = sections[hi]
+        for si in stubs:
+            stub = sections[si]
+            for f in stub["edges"]:
+                f["properties"]["section_id"] = host["section_id"]
+                host["edges"].append(f)
+                host["edge_ids"].append(f["properties"]["edge_id"])
+                if f["properties"].get("is_private"):
+                    host["is_private"] = True
+        geom_pts: list[list[float]] = []
+        for f in host["edges"]:
+            for c in f["geometry"]["coordinates"]:
+                geom_pts.append(c)
+        if geom_pts:
+            xs = [p[0] for p in geom_pts]
+            ys = [p[1] for p in geom_pts]
+            host["bbox"] = [min(xs), min(ys), max(xs), max(ys)]
+        total_m = sum(
+            float(f["properties"].get("length", 0.0) or 0.0) for f in host["edges"]
+        )
+        host["total_km"] = round(total_m / 1000.0, 3)
+        host["estimated_hours"] = round(host["total_km"] / WALK_SPEED_KMH, 2)
+
+    sections = [s for k, s in enumerate(sections) if k not in absorbed_into]
+    sections.sort(key=lambda s: (s["parking_anchor_key"],))
+    for new_id, s in enumerate(sections):
+        s["section_id"] = new_id
+        s["color"] = _color_for(new_id)
+        for f in s["edges"]:
+            f["properties"]["section_id"] = new_id
+    return sections
+
+
 def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
     """Voronoi-by-lot partition of edges; pockets clustered with DBSCAN."""
     lots = find_free_public_parking(boundary_polygon)
@@ -690,4 +796,6 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
                 next_id += 1
     # Wave 5J: fold tiny graph-adjacent street-parking sections together.
     sections = _merge_adjacent_street_sections(sections, G)
+    # Wave 5K: absorb remaining small street stubs into nearest big section.
+    sections = _absorb_small_street_sections(sections, G)
     return sections
