@@ -471,45 +471,85 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
         print(f"[section_planner] WARN: {len(duplicates)} duplicated edges across sections; first: {duplicates[:3]}")
     if orphans:
         print(f"[section_planner] WARN: {len(orphans)} orphan edges; attaching by graph adjacency")
-        # Repair: prefer attaching each orphan to a section that already
-        # contains an edge sharing one of the orphan's endpoints, so per-section
-        # graph connectivity (Wave 5F.2) is preserved. Fall back to nearest
-        # section by anchor distance when no graph-adjacent section exists.
-        if sections:
-            node_to_sections: dict[int, set[int]] = {}
-            for sec_idx, s in enumerate(sections):
-                for f in s["edges"]:
-                    p = f["properties"]
-                    node_to_sections.setdefault(int(p["u"]), set()).add(sec_idx)
-                    node_to_sections.setdefault(int(p["v"]), set()).add(sec_idx)
-            anchor_arr = np.array([(s["parking_lat"], s["parking_lng"]) for s in sections], dtype=float)
-            for ek in orphans:
-                u, v, _k = ek
-                adj = node_to_sections.get(int(u), set()) | node_to_sections.get(int(v), set())
-                if adj:
-                    lat, lng = edge_mids[ek]
-                    best = min(
-                        adj,
-                        key=lambda i: _haversine_m(
-                            sections[i]["parking_lat"], sections[i]["parking_lng"], lat, lng,
-                        ),
-                    )
-                else:
-                    lat, lng = edge_mids[ek]
-                    mlat = _meters_per_deg_lat(); mlng = _meters_per_deg_lng(lat)
-                    dlat = (anchor_arr[:, 0] - lat) * mlat
-                    dlng = (anchor_arr[:, 1] - lng) * mlng
-                    d = np.sqrt(dlat*dlat + dlng*dlng)
-                    best = int(np.argmin(d))
-                sec = sections[best]
-                feat = _edge_features(G, [ek], sec["section_id"])
-                if feat:
-                    sec["edges"].extend(feat)
-                    sec["edge_ids"].append(feat[0]["properties"]["edge_id"])
-                    sec["total_km"] = round(sec["total_km"] + edge_lengths_km.get(ek, 0.0), 3)
-                    sec["estimated_hours"] = round(sec["total_km"] / WALK_SPEED_KMH, 2)
-                    if feat[0]["properties"].get("is_private"):
-                        sec["is_private"] = True
-                    node_to_sections.setdefault(int(u), set()).add(best)
-                    node_to_sections.setdefault(int(v), set()).add(best)
+        # Repair: attach each orphan to a section that already contains an edge
+        # sharing one of the orphan's endpoints, preserving per-section graph
+        # connectivity (Wave 5F.2). Orphans whose entire G-connected component
+        # touches no existing section (Wave 5H: surfaces with retain_all=True)
+        # are emitted as their own street-anchored section instead of being
+        # force-attached by anchor distance, which would split the host.
+        node_to_sections: dict[int, set[int]] = {}
+        for sec_idx, s in enumerate(sections):
+            for f in s["edges"]:
+                p = f["properties"]
+                node_to_sections.setdefault(int(p["u"]), set()).add(sec_idx)
+                node_to_sections.setdefault(int(p["v"]), set()).add(sec_idx)
+
+        # Group orphans by their connected component in the orphan-only subgraph.
+        OH = nx.Graph()
+        for u, v, _k in orphans:
+            OH.add_edge(int(u), int(v))
+        orphans_by_node: dict[int, list[tuple]] = {}
+        for ek in orphans:
+            u, v, _k = ek
+            orphans_by_node.setdefault(int(u), []).append(ek)
+            orphans_by_node.setdefault(int(v), []).append(ek)
+
+        attachable: list[tuple] = []
+        standalone_components: list[list[tuple]] = []
+        for comp_nodes in nx.connected_components(OH):
+            comp_eks_set: set[tuple] = set()
+            for n in comp_nodes:
+                for ek in orphans_by_node.get(n, []):
+                    comp_eks_set.add(ek)
+            comp_eks = list(comp_eks_set)
+            touches_existing = any(n in node_to_sections for n in comp_nodes)
+            if sections and touches_existing:
+                attachable.extend(comp_eks)
+            else:
+                standalone_components.append(comp_eks)
+
+        for ek in attachable:
+            u, v, _k = ek
+            adj = node_to_sections.get(int(u), set()) | node_to_sections.get(int(v), set())
+            if not adj:
+                # Sibling orphan in the same G-component will create the bridge
+                # later; defer to the standalone path instead of attaching here.
+                standalone_components.append([ek])
+                continue
+            lat, lng = edge_mids[ek]
+            best = min(
+                adj,
+                key=lambda i: _haversine_m(
+                    sections[i]["parking_lat"], sections[i]["parking_lng"], lat, lng,
+                ),
+            )
+            sec = sections[best]
+            feat = _edge_features(G, [ek], sec["section_id"])
+            if feat:
+                sec["edges"].extend(feat)
+                sec["edge_ids"].append(feat[0]["properties"]["edge_id"])
+                sec["total_km"] = round(sec["total_km"] + edge_lengths_km.get(ek, 0.0), 3)
+                sec["estimated_hours"] = round(sec["total_km"] / WALK_SPEED_KMH, 2)
+                if feat[0]["properties"].get("is_private"):
+                    sec["is_private"] = True
+                node_to_sections.setdefault(int(u), set()).add(best)
+                node_to_sections.setdefault(int(v), set()).add(best)
+
+        next_id = max((s["section_id"] for s in sections), default=-1) + 1
+        for comp_eks in standalone_components:
+            if not comp_eks:
+                continue
+            cl_lats = [edge_mids[ek][0] for ek in comp_eks]
+            cl_lngs = [edge_mids[ek][1] for ek in comp_eks]
+            clat = float(np.mean(cl_lats))
+            clng = float(np.mean(cl_lngs))
+            anchor_key = _anchor_key("street", None, clat, clng)
+            for sub in _split_oversized(comp_eks, edge_mids, edge_lengths_km):
+                if not sub:
+                    continue
+                sections.append(_section_dict(
+                    next_id, sub, G, edge_lengths_km,
+                    "street", "Street parking", clat, clng, anchor_key,
+                ))
+                next_id += 1
     return sections

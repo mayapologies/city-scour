@@ -42,7 +42,7 @@ def fetch_road_network(polygon: Polygon | MultiPolygon) -> nx.MultiDiGraph:
         polygon,
         network_type="all",
         custom_filter=custom_filter,
-        retain_all=False,
+        retain_all=True,
         simplify=True,
     )
     return G

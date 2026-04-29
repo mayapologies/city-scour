@@ -71,7 +71,7 @@ def _telem_counts(telem: list[dict]) -> dict:
 
 def main():
     boundary = parse_geojson((ROOT.parent / "City_Boundary.geojson").read_bytes())
-    with open(ROOT / ".cache" / "graph_v4.pkl", "rb") as f:
+    with open(ROOT / ".cache" / "graph_v5.pkl", "rb") as f:
         graph = pickle.load(f)
     sections = build_sections(graph, boundary)
     sections_sorted = sorted(sections, key=lambda s: s["section_id"])

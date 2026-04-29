@@ -30,7 +30,7 @@ def test_prune_orphan_walks_v5_removes_stale(tmp_path, monkeypatch):
     keep = tmp_path / f"walks_v5_7_{valid_hash}_1.0.pkl"
     stale_hash = tmp_path / "walks_v5_7_deadbeef_1.0.pkl"
     stale_id = tmp_path / f"walks_v5_99_{valid_hash}_1.0.pkl"
-    other = tmp_path / "graph_v4.pkl"
+    other = tmp_path / "graph_v5.pkl"
     legacy = tmp_path / "walks_v4_7_1.0.pkl"
     for p in (keep, stale_hash, stale_id, other, legacy):
         p.write_bytes(b"x")

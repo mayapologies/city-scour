@@ -113,7 +113,7 @@ def get_roads(force_refresh: bool = False):
     if not force_refresh and "road_geojson" in _state:
         return _state["road_geojson"]
 
-    cached_graph = _load_cache("graph_v4")
+    cached_graph = _load_cache("graph_v5")
     if not force_refresh and cached_graph is not None:
         G = cached_graph
     else:
@@ -121,7 +121,7 @@ def get_roads(force_refresh: bool = False):
             G = fetch_road_network(poly)
         except Exception as e:
             raise HTTPException(500, f"Failed to fetch road network: {e}")
-        _save_cache("graph_v4", G)
+        _save_cache("graph_v5", G)
 
     _state["graph"] = G
     geojson = graph_to_geojson(G)
@@ -144,7 +144,7 @@ def get_sections(force_refresh: bool = False):
     if G is None:
         raise HTTPException(400, "Road network not loaded. Call /api/roads first.")
 
-    cache_key = "sections_v5"
+    cache_key = "sections_v6"
     if not force_refresh and "sections" in _state:
         return _state["sections"]
 

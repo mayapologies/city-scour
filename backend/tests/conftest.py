@@ -21,7 +21,7 @@ def boundary():
 
 @pytest.fixture(scope="session")
 def graph():
-    cache = ROOT / ".cache" / "graph_v4.pkl"
+    cache = ROOT / ".cache" / "graph_v5.pkl"
     if not cache.exists():
         pytest.skip("graph cache not present; run backend once to populate")
     with open(cache, "rb") as f:
