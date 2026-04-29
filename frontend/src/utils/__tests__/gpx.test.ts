@@ -205,9 +205,63 @@ describe("buildWalkGpx", () => {
 
   it("emits one <trkpt> per unique vertex with lat/lon ordering correct", () => {
     expect(countMatches(gpx, /<trkpt /g)).toBe(3);
-    expect(gpx).toContain('<trkpt lat="37.32" lon="-122.05"/>');
-    expect(gpx).toContain('<trkpt lat="37.33" lon="-122.04"/>');
-    expect(gpx).toContain('<trkpt lat="37.34" lon="-122.03"/>');
+    expect(gpx).toMatch(
+      /<trkpt lat="37\.32" lon="-122\.05"><ele>0<\/ele><time>[^<]+<\/time><\/trkpt>/,
+    );
+    expect(gpx).toMatch(
+      /<trkpt lat="37\.33" lon="-122\.04"><ele>0<\/ele><time>[^<]+<\/time><\/trkpt>/,
+    );
+    expect(gpx).toMatch(
+      /<trkpt lat="37\.34" lon="-122\.03"><ele>0<\/ele><time>[^<]+<\/time><\/trkpt>/,
+    );
+  });
+
+  it("emits <ele>0</ele> for the parking <wpt> and every <trkpt>", () => {
+    expect(countMatches(gpx, /<ele>0<\/ele>/g)).toBe(1 + 3);
+  });
+
+  it("includes the duration phrase in the track <desc>", () => {
+    const minutes = Math.round((4.2 / 5) * 60);
+    expect(gpx).toContain(`~${minutes} min at 5 km/h`);
+  });
+
+  it("uses the metadata <time> as the first <trkpt> time and is monotonic", () => {
+    const trkptTimes = [
+      ...gpx.matchAll(/<trkpt [^>]*><ele>0<\/ele><time>([^<]+)<\/time><\/trkpt>/g),
+    ].map((m) => Date.parse(m[1]));
+    expect(trkptTimes).toHaveLength(3);
+    expect(trkptTimes[0]).toBe(NOW.getTime());
+    for (let i = 1; i < trkptTimes.length; i++) {
+      expect(trkptTimes[i]).toBeGreaterThan(trkptTimes[i - 1]);
+    }
+  });
+
+  it("computes the per-trkpt time delta as distance / 5 km/h", () => {
+    // Two points exactly 1 km apart along a meridian (R = 6371000 m).
+    const oneKmDeg = (1000 / 6371000) * (180 / Math.PI);
+    const eOneKm = lineEdge([
+      [0, 0],
+      [0, oneKmDeg],
+    ]);
+    const g = buildWalkGpx(
+      {
+        cityName: "Test City",
+        sectionId: 1,
+        sectionName: null,
+        walkIndex: 1,
+        walkTotal: 1,
+        totalKm: 1,
+        edges: [eOneKm],
+        parking: { lat: 0, lng: 0, name: "P", type: "lot" },
+      },
+      NOW,
+    );
+    const times = [
+      ...g.matchAll(/<trkpt [^>]*><ele>0<\/ele><time>([^<]+)<\/time><\/trkpt>/g),
+    ].map((m) => Date.parse(m[1]));
+    expect(times).toHaveLength(2);
+    // 1 km at 5 km/h = 12 min = 720000 ms.
+    expect(times[1] - times[0]).toBe(720000);
   });
 });
 

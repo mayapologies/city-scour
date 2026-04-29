@@ -3,6 +3,37 @@ import type { GeoFeature, ParkingType } from "../types";
 const GPX_CREATOR = "City Scour";
 const WALK_KMH = 5;
 const JOIN_EPS = 1e-9;
+const EARTH_RADIUS_M = 6371000;
+const MS_PER_HOUR = 3600 * 1000;
+
+function toRadians(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+function haversineMeters(a: LatLon, b: LatLon): number {
+  const dLat = toRadians(b.lat - a.lat);
+  const dLon = toRadians(b.lon - a.lon);
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function trkptTimes(points: LatLon[], startMs: number): string[] {
+  const out: string[] = [];
+  let tMs = startMs;
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0) {
+      const meters = haversineMeters(points[i - 1], points[i]);
+      const hours = meters / 1000 / WALK_KMH;
+      tMs += Math.round(hours * MS_PER_HOUR);
+    }
+    out.push(new Date(tMs).toISOString());
+  }
+  return out;
+}
 
 export interface ParkingAnchor {
   lat: number;
@@ -160,9 +191,12 @@ function buildParkingWpt(
   parking: ParkingAnchor,
   sectionId: number,
   cityName: string,
+  isoTime: string,
 ): string {
   return [
     `  <wpt lat="${fmt(parking.lat)}" lon="${fmt(parking.lng)}">`,
+    `    <ele>0</ele>`,
+    `    <time>${isoTime}</time>`,
     `    <name>${escapeXml(parking.name)}</name>`,
     `    <sym>Parking Area</sym>`,
     `    <desc>${escapeXml(parkingDesc(parking, sectionId, cityName))}</desc>`,
@@ -186,14 +220,19 @@ function edgeStats(edges: GeoFeature[]): { publicCount: number; privateCount: nu
   return { publicCount: pub, privateCount: priv };
 }
 
-function buildTrack(info: TrackInfo): string {
+function buildTrack(info: TrackInfo, startMs: number): string {
+  const times = trkptTimes(info.points, startMs);
   const lines: string[] = [];
   lines.push(`  <trk>`);
   lines.push(`    <name>${escapeXml(info.name)}</name>`);
   lines.push(`    <desc>${escapeXml(info.desc)}</desc>`);
   lines.push(`    <trkseg>`);
-  for (const p of info.points) {
-    lines.push(`      <trkpt lat="${fmt(p.lat)}" lon="${fmt(p.lon)}"/>`);
+  for (let i = 0; i < info.points.length; i++) {
+    const p = info.points[i];
+    lines.push(
+      `      <trkpt lat="${fmt(p.lat)}" lon="${fmt(p.lon)}">` +
+        `<ele>0</ele><time>${times[i]}</time></trkpt>`,
+    );
   }
   lines.push(`    </trkseg>`);
   lines.push(`  </trk>`);
@@ -258,6 +297,8 @@ function gpxDocument(
 export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): string {
   const points = concatEdgeCoords(input.edges);
   const bounds = bboxOfPoints(points);
+  const isoTime = now.toISOString();
+  const startMs = now.getTime();
   const trackInfo = walkTrackInfo(
     input.cityName,
     input.sectionId,
@@ -269,8 +310,8 @@ export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): strin
     points
   );
   const body = [
-    buildParkingWpt(input.parking, input.sectionId, input.cityName),
-    buildTrack(trackInfo),
+    buildParkingWpt(input.parking, input.sectionId, input.cityName, isoTime),
+    buildTrack(trackInfo, startMs),
   ];
   return gpxDocument(
     input.cityName,
@@ -278,13 +319,15 @@ export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): strin
     input.sectionName,
     bounds,
     body,
-    now.toISOString(),
+    isoTime,
   );
 }
 
 export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()): string {
   const allPoints: LatLon[] = [];
   const tracks: string[] = [];
+  const isoTime = now.toISOString();
+  const startMs = now.getTime();
   for (const w of input.walks) {
     const points = concatEdgeCoords(w.edges);
     allPoints.push(...points);
@@ -299,13 +342,14 @@ export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()):
           w.totalKm,
           w.edges,
           points
-        )
+        ),
+        startMs,
       )
     );
   }
   const bounds = bboxOfPoints(allPoints);
   const body = [
-    buildParkingWpt(input.parking, input.sectionId, input.cityName),
+    buildParkingWpt(input.parking, input.sectionId, input.cityName, isoTime),
     ...tracks,
   ];
   return gpxDocument(
@@ -314,7 +358,7 @@ export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()):
     input.sectionName,
     bounds,
     body,
-    now.toISOString(),
+    isoTime,
   );
 }
 
