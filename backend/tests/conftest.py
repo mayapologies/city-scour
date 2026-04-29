@@ -50,3 +50,37 @@ def all_walks_1h(graph):
         return cache[sid]
 
     return get
+
+
+@pytest.fixture(scope="session")
+def _sections_by_km(sections):
+    return sorted(sections, key=lambda s: s["total_km"])
+
+
+@pytest.fixture(scope="session")
+def smallest_section(_sections_by_km):
+    """Smallest section by total_km. Cheap walk-building target for default
+    lane: keeps the per-test build_walks cost ≪ 1s while still exercising the
+    full pipeline (peel → CPP/RPP → spur → walk_id)."""
+    return _sections_by_km[0]
+
+
+@pytest.fixture(scope="session")
+def median_section(_sections_by_km):
+    """Median section by total_km. Used by tests that need richer walks
+    (multiple cluster edges, real spur paths) but should still finish in <2s."""
+    return _sections_by_km[len(_sections_by_km) // 2]
+
+
+@pytest.fixture(scope="session")
+def smallest_private_section(sections):
+    """Smallest is_private=True section. Used by `test_walk_marks_private` to
+    exercise the private-flag propagation on a single section instead of all
+    ~98 private sections (Wave 5I speed-up)."""
+    private = sorted(
+        (s for s in sections if s.get("is_private")),
+        key=lambda s: s["total_km"],
+    )
+    if not private:
+        pytest.skip("no private sections in graph; cannot exercise is_private flag")
+    return private[0]

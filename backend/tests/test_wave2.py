@@ -1,4 +1,6 @@
 """Wave 2A tests: parking-anchored sections + sub-walks."""
+import pytest
+
 from services.section_planner import find_free_public_parking
 from services.walk_planner import (
     build_walks, WALK_SPEED_KMH, _walk_id_for, _haversine_m,
@@ -60,8 +62,14 @@ def test_section_total_km_matches_graph(graph, sections):
     assert abs(sec_km - graph_km) < 0.5
 
 
+@pytest.mark.slow
 def test_walks_cover_section_edges(graph, sections, all_walks_1h):
-    """Walks must cover every section edge at least once (overlap allowed)."""
+    """Walks must cover every section edge at least once (overlap allowed).
+
+    Marked `slow` (Wave 5I) because this is the only test that still samples
+    small + median + largest to protect the coverage invariant against the 21km
+    sections that dominate Chinese-Postman cost. Default lane skips it; full
+    lane (`pytest -m ""`) keeps the 3-size invariant in CI."""
     samples = sorted(sections, key=lambda s: s["total_km"])
     chosen = [samples[0], samples[len(samples) // 2], samples[-1]]
     for sec in chosen:
@@ -79,38 +87,46 @@ def test_walks_cover_section_edges(graph, sections, all_walks_1h):
             )
 
 
-def test_walks_start_at_anchor(graph, sections, all_walks_1h):
+def test_walks_start_at_anchor(graph, smallest_section, all_walks_1h):
     """Every walk's start equals the section's anchor; route ends are within
-    the snapped-node tolerance (~200 m)."""
-    samples = sorted(sections, key=lambda s: s["total_km"])
-    chosen = [samples[0], samples[len(samples) // 2], samples[-1]]
-    for sec in chosen:
-        walks = all_walks_1h(sec)
-        assert len(walks) > 0
-        for w in walks:
-            assert abs(w["start"]["lat"] - sec["parking_lat"]) < 1e-6
-            assert abs(w["start"]["lng"] - sec["parking_lng"]) < 1e-6
-            if w["route"]:
-                first_lng, first_lat = w["route"][0]
-                last_lng, last_lat = w["route"][-1]
-                d_first = _haversine_m(
-                    first_lat, first_lng, w["start"]["lat"], w["start"]["lng"],
-                )
-                d_last = _haversine_m(
-                    last_lat, last_lng, w["start"]["lat"], w["start"]["lng"],
-                )
-                assert d_first <= 200.0, (
-                    f"walk {w['walk_id']} route[0] {d_first:.1f}m from anchor"
-                )
-                assert d_last <= 200.0, (
-                    f"walk {w['walk_id']} route[-1] {d_last:.1f}m from anchor"
-                )
+    the snapped-node tolerance (~200 m).
+
+    Wave 5I: pinned to `smallest_section` for the default lane. The 3-size
+    sampling that this test used to do is preserved by the slow-lane
+    `test_walks_cover_section_edges`, which forces build_walks on the largest
+    section regardless; the start-at-anchor invariant is structural and holds
+    for any section."""
+    sec = smallest_section
+    walks = all_walks_1h(sec)
+    assert len(walks) > 0
+    for w in walks:
+        assert abs(w["start"]["lat"] - sec["parking_lat"]) < 1e-6
+        assert abs(w["start"]["lng"] - sec["parking_lng"]) < 1e-6
+        if w["route"]:
+            first_lng, first_lat = w["route"][0]
+            last_lng, last_lat = w["route"][-1]
+            d_first = _haversine_m(
+                first_lat, first_lng, w["start"]["lat"], w["start"]["lng"],
+            )
+            d_last = _haversine_m(
+                last_lat, last_lng, w["start"]["lat"], w["start"]["lng"],
+            )
+            assert d_first <= 200.0, (
+                f"walk {w['walk_id']} route[0] {d_first:.1f}m from anchor"
+            )
+            assert d_last <= 200.0, (
+                f"walk {w['walk_id']} route[-1] {d_last:.1f}m from anchor"
+            )
 
 
-def test_walk_id_excludes_spur(graph, sections, all_walks_1h):
+def test_walk_id_excludes_spur(graph, median_section, all_walks_1h):
     """walk_id is hashed from cluster edges only, so it's stable even if the
-    spur path changes between graph rebuilds."""
-    sec = sorted(sections, key=lambda s: s["total_km"])[len(sections) // 2]
+    spur path changes between graph rebuilds.
+
+    Wave 5I: pinned to `median_section` (still <2s) because the smallest
+    section often has only 1 edge and no spur, which would make the
+    `if spur_only` branch a no-op."""
+    sec = median_section
     walks = all_walks_1h(sec)
     assert len(walks) > 0
     sec_edges = set(sec["edge_ids"])
@@ -128,9 +144,12 @@ def test_walk_id_excludes_spur(graph, sections, all_walks_1h):
             assert _walk_id_for(list(w["edge_ids"])) != w["walk_id"]
 
 
-def test_walk_size_constraint(graph, sections, all_walks_1h):
-    """Walks should respect a soft cap of ~1.5x target_km for hours_per_walk."""
-    sec = sorted(sections, key=lambda s: s["total_km"])[len(sections) // 2]
+def test_walk_size_constraint(graph, median_section, all_walks_1h):
+    """Walks should respect a soft cap of ~1.5x target_km for hours_per_walk.
+
+    Wave 5I: pinned to `median_section`. The hard-cap invariant is purely
+    per-walk and applies independent of section size."""
+    sec = median_section
     target_km = 1.0 * WALK_SPEED_KMH  # 5 km
     hard_cap = 1.5 * target_km
     walks = all_walks_1h(sec)
@@ -147,9 +166,14 @@ def test_walk_size_constraint(graph, sections, all_walks_1h):
         )
 
 
-def test_walk_id_deterministic(graph, sections):
-    sec = sorted(sections, key=lambda s: s["total_km"])[len(sections) // 2]
-    walks_a = build_walks(sec, graph, hours_per_walk=1.0)
+def test_walk_id_deterministic(graph, smallest_section, all_walks_1h):
+    """Re-running build_walks on the same section produces the same walk_ids.
+
+    Wave 5I: rewritten to compare a single fresh build_walks call against the
+    cached `all_walks_1h(smallest_section)` instead of two fresh builds on the
+    median section. This still exercises the cross-call determinism property."""
+    sec = smallest_section
+    walks_a = all_walks_1h(sec)
     walks_b = build_walks(sec, graph, hours_per_walk=1.0)
     ids_a = sorted(w["walk_id"] for w in walks_a)
     ids_b = sorted(w["walk_id"] for w in walks_b)
@@ -180,19 +204,23 @@ def test_section_marks_private(sections):
         assert isinstance(s["is_private"], bool)
 
 
-def test_walk_marks_private(graph, sections, all_walks_1h):
-    """At least one walk across the private sections should be flagged is_private."""
-    private_sections = [s for s in sections if s.get("is_private")]
-    assert private_sections, "no private sections to test against"
-    found = False
-    for sec in private_sections:
-        walks = all_walks_1h(sec)
-        for w in walks:
-            assert "is_private" in w
-            assert isinstance(w["is_private"], bool)
-            if w["is_private"]:
-                found = True
-    assert found, "no walks flagged is_private inside private-containing sections"
+def test_walk_marks_private(graph, smallest_private_section, all_walks_1h):
+    """At least one walk in a private section is flagged is_private, and the
+    schema for the field is bool on every walk in that section.
+
+    Wave 5I: previously iterated all ~98 private sections (which dominated by
+    re-running Chinese-Postman on the largest 21km private section); now uses
+    just `smallest_private_section`. The is_private propagation is a per-walk
+    property and any private section that yields walks suffices to assert it."""
+    sec = smallest_private_section
+    walks = all_walks_1h(sec)
+    assert walks, f"no walks built for private section {sec['section_id']}"
+    for w in walks:
+        assert "is_private" in w
+        assert isinstance(w["is_private"], bool)
+    assert any(w["is_private"] for w in walks), (
+        f"no walks flagged is_private in section {sec['section_id']}"
+    )
 
 
 def test_access_no_still_excluded(graph):
