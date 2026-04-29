@@ -85,10 +85,16 @@ def find_free_public_parking(boundary_polygon) -> list[dict]:
     lots = []
     for idx, c in zip(gdf.index, centroids):
         row = gdf.loc[idx]
+        # idx is a tuple like ("way", 12345678) or sometimes a scalar.
+        if isinstance(idx, tuple) and len(idx) >= 2:
+            osm_id = f"{idx[0]}:{idx[1]}"
+        else:
+            osm_id = str(idx)
         lots.append({
             "lat": float(c.y),
             "lng": float(c.x),
             "name": _normalize_str(row.get("name", "")) or "Public parking",
+            "osm_id": osm_id,
         })
 
     # Greedy prune within LOT_PRUNE_RADIUS_M
@@ -200,6 +206,13 @@ def _edge_features(G: nx.MultiDiGraph, edge_keys: list[tuple], section_id: int) 
     return feats
 
 
+def _anchor_key(parking_type: str, lot: dict | None, lat: float, lng: float) -> str:
+    if parking_type == "lot" and lot is not None and lot.get("osm_id"):
+        return f"lot:{lot['osm_id']}"
+    # Street-parking fallback: round to 5 decimals (~1.1 m) for stability.
+    return f"street:{round(lat, 5)}:{round(lng, 5)}"
+
+
 def _section_dict(
     section_id: int,
     edge_keys: list[tuple],
@@ -209,6 +222,7 @@ def _section_dict(
     parking_name: str,
     parking_lat: float,
     parking_lng: float,
+    parking_anchor_key: str,
 ) -> dict:
     edges = _edge_features(G, edge_keys, section_id)
     total_km = round(sum(edge_lengths_km.get(ek, 0.0) for ek in edge_keys), 3)
@@ -228,6 +242,7 @@ def _section_dict(
         "parking_name": parking_name,
         "parking_lat": parking_lat,
         "parking_lng": parking_lng,
+        "parking_anchor_key": parking_anchor_key,
         "total_km": total_km,
         "estimated_hours": round(total_km / WALK_SPEED_KMH, 2),
         "bbox": bbox,
@@ -312,21 +327,29 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
     sections: list[dict] = []
     next_id = 0
 
-    def _emit(cluster_keys: list[tuple], parking_type: str, name: str, lat: float, lng: float):
+    def _emit(
+        cluster_keys: list[tuple],
+        parking_type: str,
+        name: str,
+        lat: float,
+        lng: float,
+        lot: dict | None,
+    ):
         nonlocal next_id
         if not cluster_keys:
             return
+        anchor_key = _anchor_key(parking_type, lot, lat, lng)
         for sub in _split_oversized(cluster_keys, edge_mids, edge_lengths_km):
             if not sub:
                 continue
             sections.append(_section_dict(
                 next_id, sub, G, edge_lengths_km,
-                parking_type, name, lat, lng,
+                parking_type, name, lat, lng, anchor_key,
             ))
             next_id += 1
 
     for i, lot in enumerate(lots):
-        _emit(lot_assignments.get(i, []), "lot", lot["name"], lot["lat"], lot["lng"])
+        _emit(lot_assignments.get(i, []), "lot", lot["name"], lot["lat"], lot["lng"], lot)
 
     for cluster in pocket_clusters:
         if not cluster:
@@ -335,7 +358,7 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
         cl_lngs = [edge_mids[ek][1] for ek in cluster]
         clat = float(np.mean(cl_lats))
         clng = float(np.mean(cl_lngs))
-        _emit(cluster, "street", "Street parking", clat, clng)
+        _emit(cluster, "street", "Street parking", clat, clng, None)
 
     # Coverage check: every edge in G should appear in exactly one section
     all_edge_keys_set = set(edge_keys)

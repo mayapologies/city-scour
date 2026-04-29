@@ -2,21 +2,19 @@ import type { EdgeStatus, Progress, Section, Walk } from "../types";
 
 const STORAGE_KEY = "city-scour-progress";
 const SECTION_NAMES_KEY = "city-scour-section-names";
+const SECTION_NAMES_VERSION_KEY = "city-scour-section-names-v";
 
-export function loadSectionNames(): Record<number, string> {
+export function loadSectionNames(): Record<string, string> {
   try {
     const raw = localStorage.getItem(SECTION_NAMES_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      const result: Record<number, string> = {};
+      const out: Record<string, string> = {};
       for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === "string" && v.length > 0) {
-          const id = Number(k);
-          if (Number.isFinite(id)) result[id] = v;
-        }
+        if (typeof v === "string" && v.length > 0) out[k] = v;
       }
-      return result;
+      return out;
     }
   } catch {
     // ignore corrupt storage
@@ -25,15 +23,15 @@ export function loadSectionNames(): Record<number, string> {
 }
 
 export function saveSectionName(
-  sectionId: number,
+  anchorKey: string,
   name: string
-): Record<number, string> {
+): Record<string, string> {
   const all = loadSectionNames();
   const trimmed = name.trim();
   if (trimmed.length === 0) {
-    delete all[sectionId];
+    delete all[anchorKey];
   } else {
-    all[sectionId] = trimmed;
+    all[anchorKey] = trimmed;
   }
   try {
     localStorage.setItem(SECTION_NAMES_KEY, JSON.stringify(all));
@@ -41,6 +39,47 @@ export function saveSectionName(
     // ignore quota errors
   }
   return all;
+}
+
+/**
+ * One-time migration: old format keyed names by section_id (number).
+ * After successful migration, set version flag so we never re-run.
+ * Called once when sections first load with a non-empty list.
+ */
+export function migrateSectionNamesIfNeeded(
+  sections: Section[]
+): Record<string, string> {
+  const version = localStorage.getItem(SECTION_NAMES_VERSION_KEY);
+  if (version === "2") return loadSectionNames();
+  const current = loadSectionNames();
+  const numericEntries: Array<[number, string]> = [];
+  const newEntries: Record<string, string> = {};
+  for (const [k, v] of Object.entries(current)) {
+    if (/^[0-9]+$/.test(k)) {
+      numericEntries.push([Number(k), v]);
+    } else {
+      newEntries[k] = v;
+    }
+  }
+  if (numericEntries.length === 0) {
+    localStorage.setItem(SECTION_NAMES_VERSION_KEY, "2");
+    return current;
+  }
+  for (const [secId, name] of numericEntries) {
+    const sec = sections.find((s) => s.section_id === secId);
+    if (sec && sec.parking_anchor_key) {
+      newEntries[sec.parking_anchor_key] = name;
+    }
+    // If section_id no longer matches anything, drop the entry — better to lose
+    // a stale name than to anchor it to a wrong section.
+  }
+  try {
+    localStorage.setItem(SECTION_NAMES_KEY, JSON.stringify(newEntries));
+    localStorage.setItem(SECTION_NAMES_VERSION_KEY, "2");
+  } catch {
+    // ignore quota errors
+  }
+  return newEntries;
 }
 
 // Walking pace in km/h (used for hours-walked / hours-remaining stats).

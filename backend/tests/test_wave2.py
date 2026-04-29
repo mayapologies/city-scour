@@ -20,6 +20,7 @@ def test_section_schema(sections):
         "section_id", "parking_type", "parking_name",
         "parking_lat", "parking_lng", "total_km",
         "estimated_hours", "bbox", "edge_ids", "edges",
+        "parking_anchor_key",
     }
     for s in sections:
         missing = required - set(s.keys())
@@ -27,6 +28,9 @@ def test_section_schema(sections):
         assert s["parking_type"] in ("lot", "street")
         assert isinstance(s["edge_ids"], list) and len(s["edge_ids"]) > 0
         assert s["total_km"] > 0
+        assert isinstance(s["parking_anchor_key"], str)
+        assert s["parking_anchor_key"]  # non-empty
+        assert s["parking_anchor_key"].startswith(("lot:", "street:"))
 
 
 def test_section_coverage_invariant(graph, sections):

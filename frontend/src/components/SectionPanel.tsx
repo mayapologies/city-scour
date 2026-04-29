@@ -6,6 +6,7 @@ import {
   isWalkComplete,
   loadSectionNames,
   saveSectionName,
+  migrateSectionNamesIfNeeded,
 } from "../utils/storage";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -66,18 +67,25 @@ export function SectionPanel({
   const [showSettings, setShowSettings] = useState(false);
   const [hoursDraft, setHoursDraft] = useState(hoursPerWalk);
   const [hideCompleted, setHideCompleted] = useState(false);
-  const [sectionNames, setSectionNames] = useState<Record<number, string>>(() =>
+  const [sectionNames, setSectionNames] = useState<Record<string, string>>(() =>
     loadSectionNames()
   );
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
   const stats = getOverallStats(sections, walksBySection, progress);
 
-  const displayName = (id: number) => sectionNames[id] ?? `Section ${id}`;
+  const displayName = (s: Section) =>
+    sectionNames[s.parking_anchor_key] ?? `Section ${s.section_id}`;
 
   useEffect(() => {
     setEditingName(false);
   }, [selectedSectionId]);
+
+  useEffect(() => {
+    if (sections.length > 0) {
+      setSectionNames(migrateSectionNamesIfNeeded(sections));
+    }
+  }, [sections.length]);
 
   const isSectionFullyComplete = (sectionId: number): boolean => {
     const ws = walksBySection[sectionId];
@@ -226,7 +234,7 @@ export function SectionPanel({
                 onFocus={(e) => e.currentTarget.select()}
                 onBlur={() => {
                   setSectionNames(
-                    saveSectionName(selectedSection.section_id, nameDraft)
+                    saveSectionName(selectedSection.parking_anchor_key, nameDraft)
                   );
                   setEditingName(false);
                 }}
@@ -234,7 +242,7 @@ export function SectionPanel({
                   if (e.key === "Enter") {
                     e.preventDefault();
                     setSectionNames(
-                      saveSectionName(selectedSection.section_id, nameDraft)
+                      saveSectionName(selectedSection.parking_anchor_key, nameDraft)
                     );
                     setEditingName(false);
                   } else if (e.key === "Escape") {
@@ -249,11 +257,11 @@ export function SectionPanel({
                 style={{ fontWeight: 600, color: "#e2e8f0", cursor: "pointer" }}
                 title="Double-click to rename"
                 onDoubleClick={() => {
-                  setNameDraft(displayName(selectedSection.section_id));
+                  setNameDraft(displayName(selectedSection));
                   setEditingName(true);
                 }}
               >
-                {displayName(selectedSection.section_id)}
+                {displayName(selectedSection)}
               </div>
             )}
             <button

@@ -56,6 +56,7 @@ export interface Section {
   parking_name: string;
   parking_lat: number;
   parking_lng: number;
+  parking_anchor_key: string;
   total_km: number;
   estimated_hours: number;
   bbox: [number, number, number, number];

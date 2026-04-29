@@ -142,7 +142,7 @@ def get_sections(force_refresh: bool = False):
     if G is None:
         raise HTTPException(400, "Road network not loaded. Call /api/roads first.")
 
-    cache_key = "sections_v3"
+    cache_key = "sections_v4"
     if not force_refresh and "sections" in _state:
         return _state["sections"]
 
