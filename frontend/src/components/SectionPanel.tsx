@@ -570,6 +570,9 @@ const sectionDetailStyle: React.CSSProperties = {
   padding: "12px 16px",
   borderBottom: "1px solid #1e293b",
   background: "#0c1526",
+  maxHeight: "50vh",
+  overflowY: "auto",
+  flexShrink: 0,
 };
 
 const sectionListStyle: React.CSSProperties = {
