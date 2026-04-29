@@ -12,8 +12,9 @@ export interface ParkingAnchor {
 }
 
 export interface WalkGpxInput {
+  cityName: string;
   sectionId: number;
-  sectionName: string;
+  sectionName: string | null;
   walkIndex: number;
   walkTotal: number;
   totalKm: number;
@@ -22,8 +23,9 @@ export interface WalkGpxInput {
 }
 
 export interface SectionGpxInput {
+  cityName: string;
   sectionId: number;
-  sectionName: string;
+  sectionName: string | null;
   parking: ParkingAnchor;
   walks: Array<{
     walkIndex: number;
@@ -40,28 +42,28 @@ export interface LatLon {
 
 export function sanitizeForFilename(name: string): string {
   return name
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
 export function gpxFilenameForWalk(
+  cityName: string,
   sectionId: number,
-  sectionName: string | null,
   walkIndex: number
 ): string {
-  const slug = sectionName ? sanitizeForFilename(sectionName) : "";
-  const base = slug || `section-${sectionId}`;
-  return `${base}-walk-${walkIndex}.gpx`;
+  const citySlug = sanitizeForFilename(cityName) || "city";
+  return `${citySlug}-section-${sectionId}-walk-${walkIndex}.gpx`;
 }
 
 export function gpxFilenameForSection(
-  sectionId: number,
-  sectionName: string | null
+  cityName: string,
+  sectionId: number
 ): string {
-  const slug = sectionName ? sanitizeForFilename(sectionName) : "";
-  const base = slug || `section-${sectionId}`;
-  return `${base}-walks.gpx`;
+  const citySlug = sanitizeForFilename(cityName) || "city";
+  return `${citySlug}-section-${sectionId}-walks.gpx`;
 }
 
 function approxEqual(a: number[], b: number[]): boolean {
@@ -146,19 +148,31 @@ function bboxOfPoints(pts: LatLon[]): {
   return { minlat, minlon, maxlat, maxlon };
 }
 
-function parkingDesc(parking: ParkingAnchor): string {
-  const kind = parking.type === "lot" ? "Parking lot" : "Street parking";
-  return `${kind} — ${parking.name}`;
+function parkingDesc(
+  parking: ParkingAnchor,
+  sectionId: number,
+  cityName: string,
+): string {
+  return `Parking for Section ${sectionId} in ${cityName} (${parking.type})`;
 }
 
-function buildParkingWpt(parking: ParkingAnchor): string {
+function buildParkingWpt(
+  parking: ParkingAnchor,
+  sectionId: number,
+  cityName: string,
+): string {
   return [
     `  <wpt lat="${fmt(parking.lat)}" lon="${fmt(parking.lng)}">`,
     `    <name>${escapeXml(parking.name)}</name>`,
     `    <sym>Parking Area</sym>`,
-    `    <desc>${escapeXml(parkingDesc(parking))}</desc>`,
+    `    <desc>${escapeXml(parkingDesc(parking, sectionId, cityName))}</desc>`,
     `  </wpt>`,
   ].join("\n");
+}
+
+function sectionLabel(sectionId: number, sectionName: string | null): string {
+  const trimmed = sectionName?.trim();
+  return trimmed ? `Section ${sectionId} (${trimmed})` : `Section ${sectionId}`;
 }
 
 function edgeStats(edges: GeoFeature[]): { publicCount: number; privateCount: number } {
@@ -187,8 +201,9 @@ function buildTrack(info: TrackInfo): string {
 }
 
 function walkTrackInfo(
+  cityName: string,
   sectionId: number,
-  sectionName: string,
+  sectionName: string | null,
   walkIndex: number,
   walkTotal: number,
   totalKm: number,
@@ -197,7 +212,9 @@ function walkTrackInfo(
 ): TrackInfo {
   const minutes = Math.round((totalKm / WALK_KMH) * 60);
   const { publicCount, privateCount } = edgeStats(edges);
-  const name = `Section ${sectionId} (${sectionName}) — Walk ${walkIndex} of ${walkTotal} (${totalKm} km)`;
+  const name =
+    `${cityName} — ${sectionLabel(sectionId, sectionName)} — ` +
+    `Walk ${walkIndex} of ${walkTotal} (${totalKm} km)`;
   const desc =
     `~${minutes} min at ${WALK_KMH} km/h · ${edges.length} edges ` +
     `(${publicCount} public, ${privateCount} private) · ${points.length} points`;
@@ -205,10 +222,16 @@ function walkTrackInfo(
 }
 
 function gpxDocument(
+  cityName: string,
+  sectionId: number,
+  sectionName: string | null,
   bounds: ReturnType<typeof bboxOfPoints>,
   bodyParts: string[],
-  isoTime: string
+  isoTime: string,
 ): string {
+  const citySlug = sanitizeForFilename(cityName) || "city";
+  const docName = `City Scour — ${cityName} — ${sectionLabel(sectionId, sectionName)}`;
+  const keywords = `city-scour, ${citySlug}`;
   const header =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<gpx version="1.1" creator="${GPX_CREATOR}" ` +
@@ -216,7 +239,12 @@ function gpxDocument(
     `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
     `xsi:schemaLocation="http://www.topografix.com/GPX/1/1 ` +
     `http://www.topografix.com/GPX/1/1/gpx.xsd">`;
-  const meta: string[] = [`  <metadata>`, `    <time>${isoTime}</time>`];
+  const meta: string[] = [
+    `  <metadata>`,
+    `    <name>${escapeXml(docName)}</name>`,
+    `    <time>${isoTime}</time>`,
+    `    <keywords>${escapeXml(keywords)}</keywords>`,
+  ];
   if (bounds) {
     meta.push(
       `    <bounds minlat="${fmt(bounds.minlat)}" minlon="${fmt(bounds.minlon)}" ` +
@@ -231,6 +259,7 @@ export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): strin
   const points = concatEdgeCoords(input.edges);
   const bounds = bboxOfPoints(points);
   const trackInfo = walkTrackInfo(
+    input.cityName,
     input.sectionId,
     input.sectionName,
     input.walkIndex,
@@ -239,8 +268,18 @@ export function buildWalkGpx(input: WalkGpxInput, now: Date = new Date()): strin
     input.edges,
     points
   );
-  const body = [buildParkingWpt(input.parking), buildTrack(trackInfo)];
-  return gpxDocument(bounds, body, now.toISOString());
+  const body = [
+    buildParkingWpt(input.parking, input.sectionId, input.cityName),
+    buildTrack(trackInfo),
+  ];
+  return gpxDocument(
+    input.cityName,
+    input.sectionId,
+    input.sectionName,
+    bounds,
+    body,
+    now.toISOString(),
+  );
 }
 
 export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()): string {
@@ -252,6 +291,7 @@ export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()):
     tracks.push(
       buildTrack(
         walkTrackInfo(
+          input.cityName,
           input.sectionId,
           input.sectionName,
           w.walkIndex,
@@ -264,8 +304,18 @@ export function buildSectionGpx(input: SectionGpxInput, now: Date = new Date()):
     );
   }
   const bounds = bboxOfPoints(allPoints);
-  const body = [buildParkingWpt(input.parking), ...tracks];
-  return gpxDocument(bounds, body, now.toISOString());
+  const body = [
+    buildParkingWpt(input.parking, input.sectionId, input.cityName),
+    ...tracks,
+  ];
+  return gpxDocument(
+    input.cityName,
+    input.sectionId,
+    input.sectionName,
+    bounds,
+    body,
+    now.toISOString(),
+  );
 }
 
 export function triggerGpxDownload(filename: string, content: string): void {

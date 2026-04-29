@@ -106,8 +106,9 @@ export function SectionPanel({
       const idx = walks.findIndex((w) => w.walk_id === walk.walk_id);
       const walkIndex = (idx >= 0 ? idx : 0) + 1;
       const gpx = buildWalkGpx({
+        cityName,
         sectionId: section.section_id,
-        sectionName: displayName(section),
+        sectionName: customSectionName(section),
         walkIndex,
         walkTotal: walks.length,
         totalKm: walk.total_km,
@@ -115,7 +116,7 @@ export function SectionPanel({
         parking: parkingAnchorOf(section),
       });
       triggerGpxDownload(
-        gpxFilenameForWalk(section.section_id, customSectionName(section), walkIndex),
+        gpxFilenameForWalk(cityName, section.section_id, walkIndex),
         gpx,
       );
     } catch (err) {
@@ -134,8 +135,9 @@ export function SectionPanel({
         walks.map((w) => api.getWalk(section.section_id, w.walk_id, hoursPerWalk)),
       );
       const gpx = buildSectionGpx({
+        cityName,
         sectionId: section.section_id,
-        sectionName: displayName(section),
+        sectionName: customSectionName(section),
         parking: parkingAnchorOf(section),
         walks: walks.map((w, i) => ({
           walkIndex: i + 1,
@@ -145,7 +147,7 @@ export function SectionPanel({
         })),
       });
       triggerGpxDownload(
-        gpxFilenameForSection(section.section_id, customSectionName(section)),
+        gpxFilenameForSection(cityName, section.section_id),
         gpx,
       );
     } catch (err) {

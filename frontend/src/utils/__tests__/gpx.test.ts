@@ -43,14 +43,22 @@ describe("sanitizeForFilename", () => {
     expect(sanitizeForFilename("Already-Clean")).toBe("already-clean");
     expect(sanitizeForFilename("--__--")).toBe("");
   });
+
+  it("strips diacritics and produces city slugs", () => {
+    expect(sanitizeForFilename("Cupertino, CA")).toBe("cupertino-ca");
+    expect(sanitizeForFilename("San José")).toBe("san-jose");
+    expect(sanitizeForFilename("Mountain View")).toBe("mountain-view");
+  });
 });
 
 describe("gpx filenames", () => {
-  it("uses sanitized name when present, section-{id} otherwise", () => {
-    expect(gpxFilenameForWalk(170, "Oak Valley", 3)).toBe("oak-valley-walk-3.gpx");
-    expect(gpxFilenameForWalk(170, null, 3)).toBe("section-170-walk-3.gpx");
-    expect(gpxFilenameForSection(42, "My Park / Trail")).toBe("my-park-trail-walks.gpx");
-    expect(gpxFilenameForSection(42, null)).toBe("section-42-walks.gpx");
+  it("prefixes city slug to section/walk filenames", () => {
+    expect(gpxFilenameForWalk("Cupertino, CA", 170, 3)).toBe(
+      "cupertino-ca-section-170-walk-3.gpx",
+    );
+    expect(gpxFilenameForSection("San José", 42)).toBe(
+      "san-jose-section-42-walks.gpx",
+    );
   });
 });
 
@@ -131,6 +139,7 @@ describe("buildWalkGpx", () => {
   ];
   const gpx = buildWalkGpx(
     {
+      cityName: "Cupertino, CA",
       sectionId: 170,
       sectionName: "Oak Valley",
       walkIndex: 1,
@@ -150,18 +159,48 @@ describe("buildWalkGpx", () => {
     expect(gpx).toContain("<bounds minlat=");
   });
 
+  it("includes metadata <name> and <keywords> with city slug", () => {
+    expect(gpx).toContain(
+      "<name>City Scour — Cupertino, CA — Section 170 (Oak Valley)</name>",
+    );
+    expect(gpx).toContain("<keywords>city-scour, cupertino-ca</keywords>");
+  });
+
   it("includes exactly one <wpt> for the parking anchor with sym=Parking Area", () => {
     expect(countMatches(gpx, /<wpt /g)).toBe(1);
     expect(gpx).toContain("<sym>Parking Area</sym>");
     expect(gpx).toContain("<name>Oak Valley Lot</name>");
     expect(gpx).toContain('<wpt lat="37.32" lon="-122.05">');
+    expect(gpx).toContain(
+      "<desc>Parking for Section 170 in Cupertino, CA (lot)</desc>",
+    );
   });
 
   it("emits exactly one <trk> with the expected name", () => {
     expect(countMatches(gpx, /<trk>/g)).toBe(1);
     expect(gpx).toContain(
-      "<name>Section 170 (Oak Valley) — Walk 1 of 5 (4.2 km)</name>",
+      "<name>Cupertino, CA — Section 170 (Oak Valley) — Walk 1 of 5 (4.2 km)</name>",
     );
+  });
+
+  it("drops empty parens when sectionName is null", () => {
+    const g2 = buildWalkGpx(
+      {
+        cityName: "Cupertino, CA",
+        sectionId: 170,
+        sectionName: null,
+        walkIndex: 1,
+        walkTotal: 5,
+        totalKm: 4.2,
+        edges,
+        parking: PARKING,
+      },
+      NOW,
+    );
+    expect(g2).toContain(
+      "<name>Cupertino, CA — Section 170 — Walk 1 of 5 (4.2 km)</name>",
+    );
+    expect(g2).not.toContain("Section 170 ()");
   });
 
   it("emits one <trkpt> per unique vertex with lat/lon ordering correct", () => {
@@ -187,6 +226,7 @@ describe("buildSectionGpx", () => {
   ];
   const gpx = buildSectionGpx(
     {
+      cityName: "Cupertino, CA",
       sectionId: 170,
       sectionName: "Oak Valley",
       parking: PARKING,
