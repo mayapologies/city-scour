@@ -14,6 +14,11 @@ The app shows a sidebar of color-coded sections on the left and a Leaflet map on
 - For each section, builds a list of **walks** (~1 hour / ~5 km each, hard cap 2 hours / ~10 km), each a closed loop starting and ending at the section's parking anchor. Walks together cover every road in the section.
 - Click an edge on the map to cycle its state (unvisited → walked → driven → unvisited); "Mark walked" / "Mark driven" buttons update a whole walk or section at once.
 - Progress persists in `localStorage`, keyed by stable OSM edge IDs, so re-partitioning sections or recomputing walks does not lose what you have already walked.
+- Export any walk as a GPX 1.1 file, or a whole section as a ZIP of per-walk GPX files, ready for offline GPS apps like OsmAnd, Open GPX Tracker, Footpath, or Avenza Maps.
+
+## Taking walks to your phone
+
+Each walk row in the sidebar has a `📥 GPX` button that downloads a single GPX 1.1 file (e.g. `cupertino-ca-section-170-walk-3.gpx`); each section card has a `📥 Download all walks (.zip)` button that bundles every walk in that section into one zip (`cupertino-ca-section-170-walks.zip`). Each track starts with a parking waypoint at the section's anchor so you can find your car. Import the file into any GPX-aware app on iOS or Android — on iOS, Files → "Open in" works for OsmAnd; Open GPX Tracker has its own in-app import flow. Note the GPX is a planned route, not a recording — there is no auto-tracking yet.
 
 ## Quick start
 
