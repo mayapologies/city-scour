@@ -8,6 +8,15 @@ import {
   saveSectionName,
   migrateSectionNamesIfNeeded,
 } from "../utils/storage";
+import { api } from "../utils/api";
+import {
+  buildSectionGpx,
+  buildWalkGpx,
+  gpxFilenameForSection,
+  gpxFilenameForWalk,
+  triggerGpxDownload,
+  type ParkingAnchor,
+} from "../utils/gpx";
 
 const STATUS_LABELS: Record<string, string> = {
   complete: "✓ Done",
@@ -72,10 +81,79 @@ export function SectionPanel({
   );
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [downloadingWalkId, setDownloadingWalkId] = useState<string | null>(null);
+  const [downloadingSectionId, setDownloadingSectionId] = useState<number | null>(null);
   const stats = getOverallStats(sections, walksBySection, progress);
 
   const displayName = (s: Section) =>
     sectionNames[s.parking_anchor_key] ?? `Section ${s.section_id}`;
+
+  const customSectionName = (s: Section): string | null =>
+    sectionNames[s.parking_anchor_key] ?? null;
+
+  const parkingAnchorOf = (s: Section): ParkingAnchor => ({
+    lat: s.parking_lat,
+    lng: s.parking_lng,
+    name: s.parking_name,
+    type: s.parking_type,
+  });
+
+  const handleDownloadWalk = async (section: Section, walk: Walk) => {
+    if (downloadingWalkId) return;
+    setDownloadingWalkId(walk.walk_id);
+    try {
+      const detail = await api.getWalk(section.section_id, walk.walk_id, hoursPerWalk);
+      const idx = walks.findIndex((w) => w.walk_id === walk.walk_id);
+      const walkIndex = (idx >= 0 ? idx : 0) + 1;
+      const gpx = buildWalkGpx({
+        sectionId: section.section_id,
+        sectionName: displayName(section),
+        walkIndex,
+        walkTotal: walks.length,
+        totalKm: walk.total_km,
+        edges: detail.route_features,
+        parking: parkingAnchorOf(section),
+      });
+      triggerGpxDownload(
+        gpxFilenameForWalk(section.section_id, customSectionName(section), walkIndex),
+        gpx,
+      );
+    } catch (err) {
+      console.error("Walk GPX download failed", err);
+    } finally {
+      setDownloadingWalkId(null);
+    }
+  };
+
+  const handleDownloadSection = async (section: Section) => {
+    if (downloadingSectionId !== null) return;
+    if (walks.length === 0) return;
+    setDownloadingSectionId(section.section_id);
+    try {
+      const details = await Promise.all(
+        walks.map((w) => api.getWalk(section.section_id, w.walk_id, hoursPerWalk)),
+      );
+      const gpx = buildSectionGpx({
+        sectionId: section.section_id,
+        sectionName: displayName(section),
+        parking: parkingAnchorOf(section),
+        walks: walks.map((w, i) => ({
+          walkIndex: i + 1,
+          walkTotal: walks.length,
+          totalKm: w.total_km,
+          edges: details[i].route_features,
+        })),
+      });
+      triggerGpxDownload(
+        gpxFilenameForSection(section.section_id, customSectionName(section)),
+        gpx,
+      );
+    } catch (err) {
+      console.error("Section GPX download failed", err);
+    } finally {
+      setDownloadingSectionId(null);
+    }
+  };
 
   useEffect(() => {
     setEditingName(false);
@@ -310,6 +388,21 @@ export function SectionPanel({
                 : "✓ Mark section complete"}
             </button>
           </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button
+              style={downloadBtnStyle}
+              disabled={
+                walks.length === 0 ||
+                downloadingSectionId === selectedSection.section_id
+              }
+              onClick={() => handleDownloadSection(selectedSection)}
+              title="Download all walks as a single GPX file"
+            >
+              {downloadingSectionId === selectedSection.section_id
+                ? "⏳ Building GPX…"
+                : "📥 Download all walks (.gpx)"}
+            </button>
+          </div>
 
           {/* Walks list */}
           <div style={{ marginTop: 12 }}>
@@ -392,6 +485,17 @@ export function SectionPanel({
                       }}
                     >
                       {walkComplete ? "↺ Unmark" : "✓ Mark complete"}
+                    </button>
+                    <button
+                      style={walkGpxBtnStyle}
+                      disabled={downloadingWalkId === w.walk_id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDownloadWalk(selectedSection, w);
+                      }}
+                      title="Download this walk as a GPX file"
+                    >
+                      {downloadingWalkId === w.walk_id ? "⏳" : "📥 GPX"}
                     </button>
                   </div>
                 </div>
@@ -510,6 +614,28 @@ const walkBtnCompleteStyle: React.CSSProperties = {
   borderRadius: 4,
   cursor: "pointer",
   fontSize: 10,
+};
+
+const walkGpxBtnStyle: React.CSSProperties = {
+  padding: "3px 8px",
+  background: "#1e293b",
+  color: "#cbd5e1",
+  border: "1px solid #334155",
+  borderRadius: 4,
+  cursor: "pointer",
+  fontSize: 10,
+  whiteSpace: "nowrap",
+};
+
+const downloadBtnStyle: React.CSSProperties = {
+  flex: 1,
+  padding: "6px 10px",
+  background: "#1e293b",
+  color: "#cbd5e1",
+  border: "1px solid #334155",
+  borderRadius: 6,
+  cursor: "pointer",
+  fontSize: 12,
 };
 
 const walkBtnUnmarkStyle: React.CSSProperties = {
