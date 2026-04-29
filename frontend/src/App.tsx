@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MapView } from "./components/MapView";
 import { SectionPanel } from "./components/SectionPanel";
 import { useProgress } from "./hooks/useProgress";
@@ -27,6 +27,13 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const { progress, markEdge, markEdges, markSection, resetProgress } = useProgress(sections);
+
+  // Ref tracks the currently-selected section so the prefetch worker can skip it
+  // without re-running the prefetch effect on every selection change.
+  const selectedSectionIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    selectedSectionIdRef.current = selectedSectionId;
+  }, [selectedSectionId]);
 
   // Boot: load default boundary → roads → sections
   useEffect(() => {
@@ -67,29 +74,41 @@ export default function App() {
   }, [selectedSectionId, hoursPerWalk, walksBySection]);
 
   // Prefetch walks for every section so header km/hours stats include the full network.
-  // Runs after sections load and whenever hours-per-walk changes.
+  // Runs after sections load and whenever hours-per-walk changes. Capped at 3 concurrent
+  // fetches to leave HTTP/1.1 connections free for the on-click selection and UI assets;
+  // the currently-selected section is skipped here and handled by the per-selection effect.
   useEffect(() => {
     if (sections.length === 0) return;
     let cancelled = false;
-    (async () => {
-      const sectionIds = sections.map((s) => s.section_id);
-      const results = await Promise.all(
-        sectionIds.map((sid) =>
-          api
-            .getSectionWalks(sid, hoursPerWalk)
-            .then((res) => [sid, res.walks] as const)
-            .catch(() => [sid, [] as Walk[]] as const)
-        )
-      );
-      if (cancelled) return;
-      setWalksBySection((prev) => {
-        const next = { ...prev };
-        for (const [sid, ws] of results) {
-          if ((next[sid]?.length ?? 0) === 0 && ws.length > 0) next[sid] = ws;
+    const PREFETCH_CONCURRENCY = 3;
+    const queue = sections.map((s) => s.section_id);
+    let cursor = 0;
+    const worker = async () => {
+      while (!cancelled) {
+        const idx = cursor++;
+        if (idx >= queue.length) return;
+        const sid = queue[idx];
+        if (sid === selectedSectionIdRef.current) continue;
+        let walks: Walk[] = [];
+        try {
+          const res = await api.getSectionWalks(sid, hoursPerWalk);
+          walks = res.walks;
+        } catch {
+          walks = [];
         }
-        return next;
-      });
-    })();
+        if (cancelled) return;
+        if (walks.length > 0) {
+          setWalksBySection((prev) =>
+            (prev[sid]?.length ?? 0) === 0 ? { ...prev, [sid]: walks } : prev
+          );
+        }
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(PREFETCH_CONCURRENCY, queue.length) },
+      worker
+    );
+    void Promise.all(workers);
     return () => {
       cancelled = true;
     };
