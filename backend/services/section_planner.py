@@ -24,6 +24,9 @@ DBSCAN_EPS_M = 250.0            # cluster pocket edges within this distance
 DBSCAN_MIN_SAMPLES = 3
 MAX_SECTION_KM = 30.0           # split sections larger than this via k-means
 MIN_COMPONENT_EDGES = 3         # connected-component fragments smaller than this are dropped
+MERGE_MAX_DIST_M = 150.0        # Wave 5J: street sections within this on G are merged
+MERGE_MAX_COMBINED_KM = 5.0     # don't fold a stub into a large section
+MERGE_MAX_COMBINED_EDGES = 300  # sanity cap on merged edge count
 
 
 def _clean(v, default=""):
@@ -308,6 +311,139 @@ def _section_dict(
     }
 
 
+def _section_node_set(section: dict) -> set[int]:
+    """Return the set of road-graph nodes touched by `section`'s edges."""
+    nodes: set[int] = set()
+    for f in section["edges"]:
+        p = f["properties"]
+        nodes.add(int(p["u"]))
+        nodes.add(int(p["v"]))
+    return nodes
+
+
+def _merge_adjacent_street_sections(
+    sections: list[dict],
+    G: nx.MultiDiGraph,
+) -> list[dict]:
+    """Wave 5J: fold tiny graph-adjacent street-parking sections into neighbors.
+
+    Iterates to fixpoint. Two `street`-typed sections are merge-eligible when:
+      - both have `parking_type == "street"` (lot sections never merge),
+      - their node sets intersect (so the merged edge-induced subgraph stays
+        graph-connected — Wave 5F.2 invariant). A shared node is the only way
+        the post-merge subgraph remains connected without stealing bridging
+        edges from a third section, which would break the coverage invariant.
+        A multi-source Dijkstra on `G.to_undirected` weighted by `length` with
+        cutoff=MERGE_MAX_DIST_M trivially reports the shared node at
+        distance 0, so this implementation uses direct node-intersection,
+      - combined `total_km` ≤ MERGE_MAX_COMBINED_KM (no folding stubs into a
+        large blob),
+      - combined edge count ≤ MERGE_MAX_COMBINED_EDGES (sanity cap).
+    At each step we pick the candidate pair with the smallest combined km so
+    that small stubs snowball into one another instead of growing one giant
+    blob. The larger constituent contributes the merged section's anchor
+    (key/lat/lng/name) so user renames (Wave 5D) survive re-runs when the
+    larger half is unchanged. `section_id` is re-numbered (and edge
+    `section_id` properties rewritten) only if any merge happened, sorted by
+    `parking_anchor_key` for determinism.
+    """
+    if len(sections) < 2:
+        return sections
+
+    merged_any = False
+
+    while True:
+        street_idxs = [
+            i for i, s in enumerate(sections) if s.get("parking_type") == "street"
+        ]
+        if len(street_idxs) < 2:
+            break
+
+        nodes_by_idx: dict[int, set[int]] = {
+            i: _section_node_set(sections[i]) for i in street_idxs
+        }
+        node_to_sections: dict[int, set[int]] = {}
+        for i in street_idxs:
+            for n in nodes_by_idx[i]:
+                node_to_sections.setdefault(n, set()).add(i)
+
+        # Adjacency derived from shared nodes; equivalent to a multi-source
+        # Dijkstra reaching B nodes at distance 0 from A's source set.
+        adjacent: set[tuple[int, int]] = set()
+        for secs in node_to_sections.values():
+            if len(secs) < 2:
+                continue
+            ordered = sorted(secs)
+            for ai in range(len(ordered)):
+                for bi in range(ai + 1, len(ordered)):
+                    adjacent.add((ordered[ai], ordered[bi]))
+
+        best_pair: tuple[int, int] | None = None
+        best_combined_km = float("inf")
+        for i, j in adjacent:
+            a, b = sections[i], sections[j]
+            combined_km = float(a["total_km"]) + float(b["total_km"])
+            if combined_km > MERGE_MAX_COMBINED_KM:
+                continue
+            combined_edges = len(a["edge_ids"]) + len(b["edge_ids"])
+            if combined_edges > MERGE_MAX_COMBINED_EDGES:
+                continue
+            if combined_km < best_combined_km:
+                best_combined_km = combined_km
+                best_pair = (i, j)
+
+        if best_pair is None:
+            break
+
+        i, j = best_pair
+        a, b = sections[i], sections[j]
+        big, small = (a, b) if float(a["total_km"]) >= float(b["total_km"]) else (b, a)
+
+        merged_edges = list(a["edges"]) + list(b["edges"])
+        geom_pts = []
+        for f in merged_edges:
+            for c in f["geometry"]["coordinates"]:
+                geom_pts.append(c)
+        if geom_pts:
+            xs = [p[0] for p in geom_pts]
+            ys = [p[1] for p in geom_pts]
+            bbox = [min(xs), min(ys), max(xs), max(ys)]
+        else:
+            bbox = list(big.get("bbox", [
+                big["parking_lng"], big["parking_lat"],
+                big["parking_lng"], big["parking_lat"],
+            ]))
+
+        total_km = round(float(a["total_km"]) + float(b["total_km"]), 3)
+        merged = {
+            "section_id": big["section_id"],  # placeholder; renumbered below
+            "parking_type": "street",
+            "parking_name": big["parking_name"],
+            "parking_lat": big["parking_lat"],
+            "parking_lng": big["parking_lng"],
+            "parking_anchor_key": big["parking_anchor_key"],
+            "total_km": total_km,
+            "estimated_hours": round(total_km / WALK_SPEED_KMH, 2),
+            "bbox": bbox,
+            "edge_ids": list(a["edge_ids"]) + list(b["edge_ids"]),
+            "edges": merged_edges,
+            "color": big.get("color", _color_for(big["section_id"])),
+            "is_private": bool(a.get("is_private")) or bool(b.get("is_private")),
+        }
+        sections = [s for k, s in enumerate(sections) if k != i and k != j]
+        sections.append(merged)
+        merged_any = True
+
+    if merged_any:
+        sections.sort(key=lambda s: (s["parking_anchor_key"],))
+        for new_id, s in enumerate(sections):
+            s["section_id"] = new_id
+            s["color"] = _color_for(new_id)
+            for f in s["edges"]:
+                f["properties"]["section_id"] = new_id
+    return sections
+
+
 def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
     """Voronoi-by-lot partition of edges; pockets clustered with DBSCAN."""
     lots = find_free_public_parking(boundary_polygon)
@@ -552,4 +688,6 @@ def build_sections(G: nx.MultiDiGraph, boundary_polygon) -> list[dict]:
                     "street", "Street parking", clat, clng, anchor_key,
                 ))
                 next_id += 1
+    # Wave 5J: fold tiny graph-adjacent street-parking sections together.
+    sections = _merge_adjacent_street_sections(sections, G)
     return sections
