@@ -539,7 +539,7 @@ export function SectionPanel({
                 {s.parking_type === "lot" ? "🅿" : "🛣"}
               </span>
               <span style={{ color: "#e2e8f0", fontSize: 13, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {s.parking_name}
+                {displayName(s)}
               </span>
               <span style={{ fontSize: 11, color: "#64748b" }}>
                 {s.total_km}km
