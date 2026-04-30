@@ -84,7 +84,7 @@ export function SectionPanel({
   const [nameDraft, setNameDraft] = useState("");
   const [downloadingWalkId, setDownloadingWalkId] = useState<string | null>(null);
   const [downloadingSectionId, setDownloadingSectionId] = useState<number | null>(null);
-  const stats = getOverallStats(sections, walksBySection, progress);
+  const stats = getOverallStats(sections, progress);
 
   const displayName = (s: Section) =>
     sectionNames[s.parking_anchor_key] ?? `Section ${s.section_id}`;
@@ -279,17 +279,13 @@ export function SectionPanel({
             <span style={statsDotStyle}>·</span>
             <span>
               <strong style={statsNumStyle}>{stats.kmComplete.toFixed(1)}</strong> /{" "}
-              {stats.walksLoaded ? stats.kmTotal.toFixed(1) : "…"} km
+              {stats.kmTotal.toFixed(1)} km
             </span>
           </div>
           <div style={statsLineStyle}>
             <span>~{stats.hoursWalked.toFixed(1)} h walked</span>
             <span style={statsDotStyle}>·</span>
-            <span>
-              ~
-              {stats.walksLoaded ? stats.hoursRemaining.toFixed(1) : "…"} h
-              remaining
-            </span>
+            <span>~{stats.hoursRemaining.toFixed(1)} h remaining</span>
           </div>
           <label style={hideToggleStyle}>
             <input

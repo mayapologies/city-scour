@@ -166,35 +166,33 @@ export interface OverallStats {
   hoursWalked: number;
   hoursRemaining: number;
   percentComplete: number;
-  walksLoaded: boolean;
 }
 
 export function getOverallStats(
   sections: Section[],
-  walksBySection: Record<number, Walk[]>,
   progress: Progress
 ): OverallStats {
   let kmTotal = 0;
   let kmComplete = 0;
   let sectionsComplete = 0;
-  let walksLoaded = sections.length > 0;
 
   for (const section of sections) {
-    const walks = walksBySection[section.section_id];
-    if (!walks) {
-      walksLoaded = false;
-      continue;
-    }
-    let allWalksDone = walks.length > 0;
-    for (const w of walks) {
-      kmTotal += w.total_km;
-      if (isWalkComplete(w, progress)) {
-        kmComplete += w.total_km;
+    kmTotal += section.total_km;
+    let allEdgesDone = section.edges.length > 0;
+    for (const feat of section.edges) {
+      const props = feat.properties as { edge_id?: unknown; length?: unknown };
+      const edgeId = typeof props.edge_id === "string" ? props.edge_id : null;
+      const isComplete =
+        edgeId !== null && progress.edges[edgeId] === "complete";
+      if (isComplete) {
+        if (typeof props.length === "number" && Number.isFinite(props.length)) {
+          kmComplete += props.length / 1000;
+        }
       } else {
-        allWalksDone = false;
+        allEdgesDone = false;
       }
     }
-    if (allWalksDone) sectionsComplete++;
+    if (allEdgesDone) sectionsComplete++;
   }
 
   const kmRemaining = Math.max(0, kmTotal - kmComplete);
@@ -206,6 +204,5 @@ export function getOverallStats(
     hoursWalked: kmComplete / WALK_KMH,
     hoursRemaining: kmRemaining / WALK_KMH,
     percentComplete: kmTotal > 0 ? Math.round((kmComplete / kmTotal) * 100) : 0,
-    walksLoaded,
   };
 }
